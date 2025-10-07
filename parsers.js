@@ -198,20 +198,69 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
     }
     return records;
 }
-function parseFixedBusinessAppropriation(data, config, fundName, sheet) {
+function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
+    const records = [];
     const colMap = { '項目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
-    return _parseFixed(data, config, fundName, sheet, 6, colMap);
+    const keyColIndex = colMap[config.keyColumn];
+    const numericCols = config.columns.filter(c => c !== config.keyColumn);
+    const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
+
+    let inDeficitSection = false;
+
+    for (let i = 6; i < data.length; i++) {
+        const row = data[i];
+        if (!Array.isArray(row) || row.length === 0) continue;
+
+        let keyText = String(row[keyColIndex] || '').trim();
+        if (!keyText || keyText.startsWith('註')) continue;
+
+        if (normalize(keyText) === '虧損之部') {
+            inDeficitSection = true;
+        }
+
+        if (normalize(keyText) === '其他綜合損益轉入數') {
+            keyText += inDeficitSection ? ' (虧損之部)' : ' (盈餘之部)';
+        }
+
+        const record = { '基金名稱': fundName, [config.keyColumn]: keyText };
+        let hasMeaningfulData = false;
+
+        numericCols.forEach(colName => {
+            const colIndex = colMap[colName];
+            if (colIndex !== undefined) {
+                const value = row[colIndex];
+                record[colName] = value;
+                if (value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
+                    hasMeaningfulData = true;
+                }
+            }
+        });
+        
+        let indentLevel = 0;
+        try {
+            const cellAddress = XLSX.utils.encode_cell({ r: i, c: keyColIndex });
+            if (sheet[cellAddress]?.s?.alignment?.indent) {
+                indentLevel = sheet[cellAddress].s.alignment.indent;
+            }
+        } catch(e) {}
+        record.indent_level = indentLevel;
+
+        if (hasMeaningfulData || keyText) {
+            records.push(record);
+        }
+    }
+    return records;
 }
 function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
     return _parseFixed(data, config, fundName, sheet, 5, colMap);
 }
-function parseFixedBusinessBalanceSheet(data, fundName, sheet) {
-    const assetConfig = { keyColumn: '科目', columns: ['科目', '上年度決算數', '原列決算數', '修正數', '決算核定數'] };
+function parseBusinessBalanceSheet_SideBySide(data, config, fundName, sheet) {
+    const assetConfig = { ...config };
     const assetColMap = { '科目': 3, '上年度決算數': 1, '原列決算數': 4, '修正數': 5, '決算核定數': 6 };
     const assetRecords = _parseFixed(data, assetConfig, fundName, sheet, 6, assetColMap);
 
-    const liabilityConfig = { keyColumn: '科目', columns: ['科目', '上年度決算數', '原列決算數', '修正數', '決算核定數'] };
+    const liabilityConfig = { ...config };
     const liabilityColMap = { '科目': 10, '上年度決算數': 8, '原列決算數': 11, '修正數': 12, '決算核定數': 13 };
     const liabilityRecords = _parseFixed(data, liabilityConfig, fundName, sheet, 6, liabilityColMap);
 
@@ -226,9 +275,9 @@ const PARSERS = {
     fixed_xianliu: parseFixedXianliuBiao,
     fixed_shouzhi: parseFixedShouzhiBiao,
     fixed_business_profitloss_stateful: parseBusinessProfitLoss_Stateful,
-    fixed_business_appropriation: parseFixedBusinessAppropriation,
+    fixed_business_appropriation_stateful: parseBusinessAppropriation_Stateful,
     fixed_business_cashflow: parseFixedBusinessCashFlow,
-    fixed_business_balancesheet: parseFixedBusinessBalanceSheet,
+    fixed_business_balancesheet_sidebyside: parseBusinessBalanceSheet_SideBySide,
 };
 
 // 主處理函式
@@ -237,7 +286,9 @@ export function processFile(file, selectedFundType) {
         const reader = new FileReader();
         reader.onload = (e) => {
             const workbook = XLSX.read(e.target.result, { type: 'array', cellStyles: true });
-            let fundName = extractFundName(workbook) || file.name.replace(/\.xlsx?$/, '');
+            
+            let fundName = extractFundName(workbook, selectedFundType) || file.name.replace(/\.xlsx?$/, '');
+            
             let extractedData = {};
             const activeConfig = FULL_CONFIG[selectedFundType];
 
@@ -249,7 +300,6 @@ export function processFile(file, selectedFundType) {
                 const sheet = workbook.Sheets[sheetName];
                 const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
                 
-                // 根據 config 呼叫對應的解析器
                 const parserFunc = PARSERS[config.parser];
                 if (parserFunc) {
                     const records = parserFunc(data, config, fundName, sheet);
