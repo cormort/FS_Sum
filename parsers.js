@@ -198,6 +198,8 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
     }
     return records;
 }
+
+// ★★★ 新增：為營業基金盈虧撥補表設計的有狀態解析器 ★★★
 function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     const records = [];
     const colMap = { '項目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
@@ -205,7 +207,7 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     const numericCols = config.columns.filter(c => c !== config.keyColumn);
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
 
-    let inDeficitSection = false;
+    let inDeficitSection = false; // 狀態標記：是否已進入虧損之部
 
     for (let i = 6; i < data.length; i++) {
         const row = data[i];
@@ -251,10 +253,12 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     }
     return records;
 }
+
 function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
     return _parseFixed(data, config, fundName, sheet, 5, colMap);
 }
+
 function parseBusinessBalanceSheet_SideBySide(data, config, fundName, sheet) {
     const assetConfig = { ...config };
     const assetColMap = { '科目': 3, '上年度決算數': 1, '原列決算數': 4, '修正數': 5, '決算核定數': 6 };
