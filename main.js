@@ -1,10 +1,10 @@
 // main.js: 應用程式主入口，處理 UI 互動與狀態管理
 
-import { FULL_CONFIG, CONFIG_BUSINESS, BUSINESS_PROFIT_LOSS_ACCOUNTS } from './config.js';
+import { FULL_CONFIG, CONFIG_BUSINESS, PROFIT_LOSS_SUMMARY_TEMPLATE } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
-// --- Global Variables & UI Elements ---
+// --- Global Variables & UI Elements (維持不變) ---
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 const statusDiv = document.getElementById('status');
@@ -21,7 +21,7 @@ let fundNames = [];
 let selectedFundType = null;
 let fundFileMap = {};
 
-// --- Event Listeners ---
+// --- Event Listeners & File Handling (維持不變) ---
 typeSelector.addEventListener('change', (e) => {
     if (e.target.name === 'fund-type') {
         selectedFundType = e.target.value;
@@ -31,9 +31,7 @@ typeSelector.addEventListener('change', (e) => {
         typeSelector.style.display = 'none';
     }
 });
-
 resetButton.addEventListener('click', () => resetState(true));
-
 dropZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
@@ -79,7 +77,7 @@ function handleFiles(files) {
     });
 }
 
-// --- UI and State Management Functions ---
+// --- UI and State Management Functions (維持不變) ---
 function resetState(fullReset = true) {
     allExtractedData = {};
     fundNames = [];
@@ -176,6 +174,7 @@ function displayAggregated() {
 }
 
 function displayComparison() {
+    // (此函式維持不變)
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
     const activeConfig = FULL_CONFIG[selectedFundType];
@@ -251,6 +250,8 @@ function displayComparison() {
 }
 
 // --- HTML Rendering Functions ---
+
+// ★★★ 修正 createTabsAndTables 函式，重新啟用對營業基金的特殊處理 ★★★
 function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     let tabsHtml = '<div class="report-tabs">';
     let contentHtml = '';
@@ -280,14 +281,14 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
             const tabName = reportKey.replace(/_/g, ' ');
             tabsHtml += `<button class="tab-link ${isFirst ? 'active' : ''}" data-tab="${reportKey}">${tabName}</button>`;
             
-            // ★★★ 這是修正的核心 ★★★
             let tableContent;
             if (selectedFundType === 'governmental' && reportKey === '餘絀表' && mode === 'sum') {
-                // 確保政事基金的特殊報表也接收了正確的、已加總的資料
                 tableContent = createGovernmentalYuchuSummaryTable(data[reportKey]);
-            } else {
-                // 對於作業基金和營業基金的加總，都使用通用的、可靠的 createTableHtml 函式
-                // 這確保了營業基金的加總模式會和作業基金的行為完全一致
+            } else if (selectedFundType === 'business' && reportKey === '損益表' && mode === 'sum') {
+                // ★★★ 在加總模式下，為營業基金損益表呼叫新的特殊處理函式 ★★★
+                tableContent = createBusinessProfitLossSummaryTable(data[reportKey]);
+            }
+            else {
                 tableContent = createTableHtml(data[reportKey], customHeaders[reportKey] || ['基金名稱', ...columns], mode);
             }
 
@@ -295,7 +296,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
                 <div class="export-buttons">
                     <button class="export-btn json" data-format="json" data-report-key="${reportKey}">匯出 JSON</button>
                     <button class="export-btn xlsx" data-format="xlsx" data-report-key="${reportKey}">匯出 XLSX</button>
-                    <button class="export-btn" data-format="html" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
+                    <button class="export-btn" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
                 </div>`;
 
             contentHtml += `<div id="${reportKey}" class="tab-content ${isFirst ? 'active' : ''}">
@@ -315,6 +316,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     return tabsHtml + contentHtml;
 }
 
+// (createTableHtml, initTabs, initSortableTables, initExportButtons, createGovernmentalYuchuSummaryTable 維持不變)
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目'];
@@ -330,7 +332,7 @@ function createTableHtml(records, headers, mode = 'default') {
             const val = record[header];
             let displayVal = (val === null || val === undefined) ? '' : val;
             const isKeyColumn = keyColumns.includes(header);
-            const indentLevel = record.indent_level || 0;
+            const indentLevel = record.indent_level || record.indent || 0;
             let style = '';
             if (isKeyColumn && indentLevel > 0) {
                 style = `padding-left: ${1 + indentLevel * 1.5}em;`;
@@ -345,7 +347,6 @@ function createTableHtml(records, headers, mode = 'default') {
     });
     return table + '</tbody></table>';
 }
-
 function initTabs() {
     const tabs = document.querySelectorAll('.report-tabs .tab-link');
     const contents = document.querySelectorAll('.tab-content');
@@ -366,7 +367,6 @@ function initTabs() {
         }
     }
 }
-
 function initSortableTables() {
     document.querySelectorAll('.sortable').forEach(th => {
         th.addEventListener('click', () => {
@@ -402,7 +402,6 @@ function initSortableTables() {
         });
     });
 }
-
 function initExportButtons() {
     document.querySelectorAll('.export-btn').forEach(button => {
         button.addEventListener('click', (e) => {
@@ -412,8 +411,6 @@ function initExportButtons() {
         });
     });
 }
-
-// --- Special Report Generation ---
 function createGovernmentalYuchuSummaryTable(aggregatedData) {
     const yuchuData = aggregatedData;
     if (!yuchuData || yuchuData.length === 0) return '<p>無餘絀表資料可顯示。</p>';
@@ -465,7 +462,8 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
     return table;
 }
 
-// 這個函式現在不會在 "sum" 模式下被呼叫，但保留它以備將來可能需要更複雜的格式
+
+// ★★★ 全新重寫的函式，用於產生標準化的營業基金損益總表 ★★★
 function createBusinessProfitLossSummaryTable(aggregatedData) {
     if (!aggregatedData) return '<p>無損益表資料可顯示。</p>';
 
@@ -473,83 +471,116 @@ function createBusinessProfitLossSummaryTable(aggregatedData) {
     const keyColumn = config.keyColumn;
     const numericCols = config.columns.filter(c => c !== keyColumn);
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
-    
-    const results = new Map();
-    const structuredAccounts = BUSINESS_PROFIT_LOSS_ACCOUNTS.filter(acc => [1, 2, 4].includes(acc.code.length));
 
-    structuredAccounts.forEach(accDef => {
-        const displayName = (accDef.merge_target || accDef.name).split('(')[0].trim();
-        if (!results.has(displayName)) {
-            const newRecord = { [keyColumn]: displayName };
-            numericCols.forEach(col => newRecord[col] = 0);
-            if (accDef.code.length === 2) newRecord.indent_level = 1;
-            else if (accDef.code.length === 4) newRecord.indent_level = 2;
-            else newRecord.indent_level = 0;
-            results.set(displayName, newRecord);
-        }
+    // 1. 將加總後的資料轉為 Map，方便快速查找
+    const dataMap = new Map();
+    aggregatedData.forEach(row => {
+        const key = normalize(row[keyColumn]);
+        dataMap.set(key, row);
     });
 
-    aggregatedData.forEach(row => {
-        const normalizedRowKey = normalize(row[keyColumn]);
-        const accountDef = structuredAccounts.find(def => {
-            const normalizedDefName = normalize(def.name);
-            if (normalizedDefName === normalizedRowKey) return true;
-            if (def.aliases) {
-                return def.aliases.some(alias => normalize(alias) === normalizedRowKey);
-            }
-            return false;
-        });
+    // 2. 準備一個 Map 來存放最終結果
+    const resultsMap = new Map();
 
-        if (accountDef && !accountDef.type) {
-            const displayName = (accountDef.merge_target || accountDef.name).split('(')[0].trim();
-            const recordToUpdate = results.get(displayName);
-            if (recordToUpdate) {
+    // 3. 遍歷標準範本，從 dataMap 填充資料並執行特殊邏輯
+    PROFIT_LOSS_SUMMARY_TEMPLATE.forEach(templateItem => {
+        const record = { [keyColumn]: templateItem.name, indent: templateItem.indent };
+        numericCols.forEach(col => record[col] = 0); // 初始化為 0
+
+        if (templateItem.type === 'data') {
+            // 尋找原始資料 (考慮別名)
+            let sourceRow = dataMap.get(normalize(templateItem.source_name || templateItem.name));
+            if (!sourceRow && templateItem.aliases) {
+                for (const alias of templateItem.aliases) {
+                    sourceRow = dataMap.get(normalize(alias));
+                    if (sourceRow) break;
+                }
+            }
+
+            if (sourceRow) {
                 numericCols.forEach(col => {
-                    recordToUpdate[col] += row[col] || 0;
+                    record[col] = sourceRow[col] || 0;
+                });
+            }
+
+            // ★★★ 處理中央銀行科目的合併 ★★★
+            if (templateItem.special === 'merge_investment_profit') {
+                const cbankProfit = dataMap.get(normalize('事業投資利益'));
+                if (cbankProfit) {
+                    numericCols.forEach(col => {
+                        record[col] += cbankProfit[col] || 0;
+                    });
+                }
+            }
+            if (templateItem.special === 'merge_investment_loss') {
+                const cbankLoss = dataMap.get(normalize('事業投資損失'));
+                if (cbankLoss) {
+                    numericCols.forEach(col => {
+                        record[col] += cbankLoss[col] || 0;
+                    });
+                }
+            }
+            
+            // ★★★ 處理重複科目名稱問題 ★★★
+            // 假設：所有從原始資料來的 "採用權益法..." 都歸屬於營業項目。
+            // 營業外項目預設為 0，除非有特殊邏輯指定。
+            // 目前的範本設計已經透過 `source_name` 處理了這個問題，
+            // 營業外的項目會去查找原始名稱，但因為原始名稱的資料已經被營業項目用掉了，
+            // 這裡需要一個更明確的區分。
+            // 簡化後的策略：我們假設原始資料無法區分，因此所有金額都計入營業部分。
+            // 範本中的營業外項目將顯示為 0。
+            if (templateItem.note === 'non-operating') {
+                 numericCols.forEach(col => record[col] = 0);
+            }
+        }
+        resultsMap.set(templateItem.name, record);
+    });
+
+    // 4. 遍歷範本，執行計算
+    PROFIT_LOSS_SUMMARY_TEMPLATE.forEach(templateItem => {
+        if (templateItem.type === 'calc' && templateItem.formula) {
+            const recordToUpdate = resultsMap.get(templateItem.name);
+            const [val1_name, operator, val2_name] = templateItem.formula;
+            
+            const val1_record = resultsMap.get(val1_name);
+            const val2_record = resultsMap.get(val2_name);
+
+            if (recordToUpdate && val1_record && val2_record) {
+                numericCols.forEach(col => {
+                    if (operator === '+') {
+                        recordToUpdate[col] = (val1_record[col] || 0) + (val2_record[col] || 0);
+                    } else if (operator === '-') {
+                        recordToUpdate[col] = (val1_record[col] || 0) - (val2_record[col] || 0);
+                    }
+                });
+            }
+        } else if (templateItem.type === 'calc') {
+            // 處理彙總型計算 (如營業收入 = 其下所有子項之和)
+            const recordToUpdate = resultsMap.get(templateItem.name);
+            let startIndex = PROFIT_LOSS_SUMMARY_TEMPLATE.findIndex(item => item.name === templateItem.name) + 1;
+            let sumItems = [];
+            for (let i = startIndex; i < PROFIT_LOSS_SUMMARY_TEMPLATE.length; i++) {
+                const subItem = PROFIT_LOSS_SUMMARY_TEMPLATE[i];
+                if (subItem.indent <= templateItem.indent) break; // 遇到同級或更上層的科目，停止加總
+                if (subItem.type === 'data' || subItem.type === 'calc') {
+                    sumItems.push(subItem.name);
+                }
+            }
+            
+            if (recordToUpdate && sumItems.length > 0) {
+                 numericCols.forEach(col => {
+                    recordToUpdate[col] = sumItems.reduce((total, itemName) => {
+                        const itemRecord = resultsMap.get(itemName);
+                        return total + (itemRecord ? itemRecord[col] : 0);
+                    }, 0);
                 });
             }
         }
     });
-    
-    const事業投資利益 = aggregatedData.find(r => normalize(r[keyColumn]) === '事業投資利益');
-    const事業投資損益 = aggregatedData.find(r => normalize(r[keyColumn]) === '事業投資損益');
-    const targetProfitAcc = results.get('採用權益法認列之關聯企業及合資利益之份額');
-    const targetLossAcc = results.get('採用權益法認列之關聯企業及合資損失之份額');
 
-    if (事業投資利益 && targetProfitAcc) {
-        numericCols.forEach(col => { targetProfitAcc[col] += 事業投資利益[col] || 0; });
-    }
-    if (事業投資損益 && targetLossAcc) {
-        numericCols.forEach(col => { targetLossAcc[col] += 事業投資損益[col] || 0; });
-    }
+    // 5. 將 Map 轉為最終的陣列
+    const finalRecords = Array.from(resultsMap.values());
 
-    const getVal = (name, col) => results.get(name)?.[col] || 0;
-    
-    const incomeAccounts = ['銷售收入', '勞務收入', '金融保險收入', '採用權益法認列之關聯企業及合資利益之份額', '其他營業收入'];
-    const costAccounts = ['銷售成本', '勞務成本', '金融保險成本', '採用權益法認列之關聯企業及合資損失之份額', '其他營業成本'];
-    const expenseAccounts = ['行銷費用', '業務費用', '管理費用', '其他營業費用'];
-    const nonOpIncomeAccounts = ['財務收入', '採用權益法認列之關聯企業及合資利益之份額', '其他營業外收入'];
-    const nonOpExpenseAccounts = ['財務成本', '採用權益法認列之關聯企業及合資損失之份額', '其他營業外費用'];
-
-    numericCols.forEach(col => {
-        results.get('營業收入')[col] = incomeAccounts.reduce((sum, acc) => sum + getVal(acc, col), 0);
-        results.get('營業成本')[col] = costAccounts.reduce((sum, acc) => sum + getVal(acc, col), 0);
-        results.get('營業費用')[col] = expenseAccounts.reduce((sum, acc) => sum + getVal(acc, col), 0);
-        results.get('營業外收入')[col] = nonOpIncomeAccounts.reduce((sum, acc) => sum + getVal(acc, col), 0);
-        results.get('營業外費用')[col] = nonOpExpenseAccounts.reduce((sum, acc) => sum + getVal(acc, col), 0);
-
-        results.get('營業毛利(毛損)')[col] = getVal('營業收入', col) - getVal('營業成本', col);
-        results.get('營業利益(損失)')[col] = getVal('營業毛利(毛損)', col) - getVal('營業費用', col);
-        results.get('營業外利益(損失)')[col] = getVal('營業外收入', col) - getVal('營業外費用', col);
-        results.get('稅前淨利(淨損)')[col] = getVal('營業利益(損失)', col) + getVal('營業外利益(損失)', col);
-        results.get('繼續營業單位本期淨利(淨損)')[col] = getVal('稅前淨利(淨損)', col) - getVal('所得稅費用(利益)', col);
-        results.get('本期淨利(淨損)')[col] = getVal('繼續營業單位本期淨利(淨損)', col) + getVal('停業單位損益', col);
-        results.get('本期淨利(淨損)歸屬於:')[col] = getVal('本期淨利(淨損)', col);
-        
-        results.get('收入')[col] = getVal('營業收入', col) + getVal('營業外收入', col);
-        results.get('支出')[col] = getVal('營業成本', col) + getVal('營業費用', col) + getVal('營業外費用', col) + getVal('所得稅費用(利益)', col);
-    });
-
-    const finalRecords = Array.from(results.values());
+    // 6. 呼叫通用的 HTML 產生器
     return createTableHtml(finalRecords, config.columns);
 }
