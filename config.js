@@ -26,6 +26,7 @@ export const FULL_CONFIG = {
     'business': CONFIG_BUSINESS
 };
 
+// ★★★ 確保您的檔案中有這一段 export ★★★
 export const PROFIT_LOSS_ACCOUNT_ORDER = [
     '營業收入',
     '銷售收入',
