@@ -21,7 +21,7 @@ let fundNames = [];
 let selectedFundType = null;
 let fundFileMap = {};
 
-// --- Event Listeners (這部分不變) ---
+// --- Event Listeners ---
 typeSelector.addEventListener('change', (e) => {
     if (e.target.name === 'fund-type') {
         selectedFundType = e.target.value;
@@ -79,7 +79,7 @@ function handleFiles(files) {
     });
 }
 
-// --- UI and State Management Functions (這部分不變) ---
+// --- UI and State Management Functions ---
 function resetState(fullReset = true) {
     allExtractedData = {};
     fundNames = [];
@@ -132,10 +132,8 @@ function displayIndividualFund() {
     initExportButtons();
 }
 
-// ★★★ 修正 displayAggregated 函式 ★★★
 function displayAggregated() {
     const summaryData = {};
-    // 建立一個標準化名稱的輔助函式
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
 
     for(const reportKey in allExtractedData) {
@@ -152,19 +150,20 @@ function displayAggregated() {
             const originalKeyText = row[keyColumn];
             if(!originalKeyText) return acc;
             
-            // ★★★ 使用標準化後的 key 來進行分組加總 ★★★
             const key = normalize(originalKeyText);
 
             if (!acc[key]) {
-                acc[key] = { [keyColumn]: originalKeyText.trim() }; // 仍然保留第一次出現的原始名稱用於顯示
+                acc[key] = { [keyColumn]: originalKeyText.trim() };
                 numericCols.forEach(col => acc[key][col] = 0);
                 acc[key].indent_level = row.indent_level || 0;
             }
             numericCols.forEach(col => {
-                const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
+                let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
                 if (!isNaN(val)) {
-                    // 營業基金的數值單位是千元，加總後可能會有小數，四捨五入取整
-                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
+                    if (selectedFundType === 'business') {
+                        val = Math.round(val);
+                    }
+                    acc[key][col] += val;
                 }
             });
             return acc;
@@ -175,7 +174,6 @@ function displayAggregated() {
     initTabs();
     initExportButtons();
 }
-
 
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
@@ -282,13 +280,14 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
             const tabName = reportKey.replace(/_/g, ' ');
             tabsHtml += `<button class="tab-link ${isFirst ? 'active' : ''}" data-tab="${reportKey}">${tabName}</button>`;
             
+            // ★★★ 這是修正的核心 ★★★
             let tableContent;
-            // ★★★ 修正特殊報表的函式呼叫，確保傳入加總後的資料 ★★★
             if (selectedFundType === 'governmental' && reportKey === '餘絀表' && mode === 'sum') {
+                // 確保政事基金的特殊報表也接收了正確的、已加總的資料
                 tableContent = createGovernmentalYuchuSummaryTable(data[reportKey]);
-            } else if (selectedFundType === 'business' && reportKey === '損益表' && mode === 'sum') {
-                tableContent = createBusinessProfitLossSummaryTable(data[reportKey]);
             } else {
+                // 對於作業基金和營業基金的加總，都使用通用的、可靠的 createTableHtml 函式
+                // 這確保了營業基金的加總模式會和作業基金的行為完全一致
                 tableContent = createTableHtml(data[reportKey], customHeaders[reportKey] || ['基金名稱', ...columns], mode);
             }
 
@@ -296,7 +295,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
                 <div class="export-buttons">
                     <button class="export-btn json" data-format="json" data-report-key="${reportKey}">匯出 JSON</button>
                     <button class="export-btn xlsx" data-format="xlsx" data-report-key="${reportKey}">匯出 XLSX</button>
-                    <button class="export-btn" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
+                    <button class="export-btn" data-format="html" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
                 </div>`;
 
             contentHtml += `<div id="${reportKey}" class="tab-content ${isFirst ? 'active' : ''}">
@@ -316,7 +315,6 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     return tabsHtml + contentHtml;
 }
 
-// (createTableHtml, initTabs, initSortableTables, initExportButtons 函式不變)
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目'];
@@ -415,19 +413,11 @@ function initExportButtons() {
     });
 }
 
-
 // --- Special Report Generation ---
-
-// ★★★ 修正 createGovernmentalYuchuSummaryTable 函式，使其接收參數 ★★★
 function createGovernmentalYuchuSummaryTable(aggregatedData) {
-    // ★★★ 不再使用全域變數，而是使用傳入的 aggregatedData ★★★
-    const yuchuData = aggregatedData; 
+    const yuchuData = aggregatedData;
     if (!yuchuData || yuchuData.length === 0) return '<p>無餘絀表資料可顯示。</p>';
 
-    // ★★★ 因為資料已經是加總過的，不再需要按基金分組，直接渲染即可 ★★★
-    // (這裡的邏輯需要重寫，因為它原本是為顯示多個基金設計的)
-    // 暫時，我們先假設它只需要顯示一行總計，或者我們直接使用 createTableHtml
-    // 為了保持原有的多欄位格式，我們需要從加總資料中找到對應項目
     const findValue = (itemName, colName) => {
         const cleanItemName = itemName.replace(/\s|　/g, '');
         const row = yuchuData.find(r => String(r['項目']).replace(/\s|　/g, '') === cleanItemName);
@@ -475,8 +465,7 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
     return table;
 }
 
-
-// (createBusinessProfitLossSummaryTable 函式不變，它的設計是正確的)
+// 這個函式現在不會在 "sum" 模式下被呼叫，但保留它以備將來可能需要更複雜的格式
 function createBusinessProfitLossSummaryTable(aggregatedData) {
     if (!aggregatedData) return '<p>無損益表資料可顯示。</p>';
 
