@@ -1,5 +1,72 @@
-// utils.js: 存放輔助工具函式
+// utils.js
 
+// --- 檔案與工作表相關 ---
+export function findSheet(workbook, keyword) { 
+    return workbook.SheetNames.find(name => name.includes(keyword)); 
+}
+
+export function extractFundName(workbook) {
+    let longestName = "";
+    for(let i=0; i < Math.min(workbook.SheetNames.length, 3); i++) {
+        const sheetName = workbook.SheetNames[i];
+        const sheet = workbook.Sheets[sheetName];
+        const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        for(let j=0; j < Math.min(data.length, 5); j++) {
+            const row = data[j];
+            if(Array.isArray(row)) {
+                const fullRowText = row.join('');
+                if (fullRowText.includes('基金')) {
+                    for(const cell of row) {
+                        const cellText = String(cell).trim();
+                        if (cellText.includes('基金') && cellText.length > longestName.length) longestName = cellText;
+                    }
+                }
+            }
+        }
+    }
+    if (longestName) {
+        const removableParts = ['收支餘絀表', '餘絀撥補表', '現金流量表', '平衡表', '資產負債表', '損益表', '盈虧撥補表']; 
+        removableParts.forEach(part => { longestName = longestName.replace(part, ''); });
+        return longestName.trim();
+    }
+    return null;
+}
+
+// --- 動態表格解析相關 (for 作業基金) ---
+export function findHeaderRowIndex(data, columns) {
+    let bestMatch = { rowIndex: -1, score: 0 };
+    for (let i = 0; i < Math.min(data.length, 10); i++) {
+        const row = data[i];
+        if (!Array.isArray(row) || row.length === 0) continue;
+        const rowAsString = row.join(' ').replace(/\s/g, '');
+        let score = 0;
+        columns.forEach(col => {
+            const cleanCol = col.replace(/\s/g, '');
+            if (rowAsString.includes(cleanCol)) score++;
+        });
+        if (score > bestMatch.score) bestMatch = { rowIndex: i, score };
+    }
+    return bestMatch.score > 1 ? bestMatch.rowIndex : -1;
+}
+
+export function getHeaderMapping(headerRow, columns, startCol = 0) {
+    const mapping = {};
+    const assignedCols = new Set();
+    columns.forEach(colName => {
+        let bestMatchColIndex = -1;
+        const cleanColName = colName.replace(/\s/g, '');
+        for (let i = startCol; i < headerRow.length; i++) {
+            if (assignedCols.has(i)) continue;
+            const cellContent = String(headerRow[i] || '').trim().replace(/\s/g, '');
+            if (cellContent === cleanColName) { bestMatchColIndex = i; break; }
+            if (cellContent.includes(cleanColName) && bestMatchColIndex === -1) { bestMatchColIndex = i; }
+        }
+        if (bestMatchColIndex !== -1) { mapping[colName] = bestMatchColIndex; assignedCols.add(bestMatchColIndex); }
+    });
+    return mapping;
+}
+
+// --- 資料匯出相關 ---
 function getTableDataAsJSON(table) {
     const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim());
     const rows = Array.from(table.querySelectorAll('tbody tr'));
@@ -23,7 +90,7 @@ export function exportData(reportKey, format) {
     const filename = `${reportKey}_${timestamp}`;
 
     if (format === 'xlsx') {
-        const wb = XLSX.utils.table_to_book(table, { raw: true }); // Use raw to export numbers not strings
+        const wb = XLSX.utils.table_to_book(table, { raw: true });
         XLSX.writeFile(wb, `${filename}.xlsx`);
     } else {
         let data, mimeType, fileExtension;
