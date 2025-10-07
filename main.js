@@ -4,7 +4,7 @@ import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
-// (Global Variables, Event Listeners, handleFiles, resetState, renderControls, refreshView, displayIndividualFund 維持不變)
+// --- Global Variables & UI Elements ---
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 const statusDiv = document.getElementById('status');
@@ -14,11 +14,14 @@ const typeSelector = document.getElementById('type-selector');
 const mainContent = document.getElementById('main-content');
 const resetButton = document.getElementById('reset-button');
 const fundTypeDisplay = document.getElementById('current-fund-type-display');
+
 const DEBUG_MODE = true; 
 let allExtractedData = {};
 let fundNames = [];
 let selectedFundType = null;
 let fundFileMap = {};
+
+// --- Event Listeners ---
 typeSelector.addEventListener('change', (e) => {
     if (e.target.name === 'fund-type') {
         selectedFundType = e.target.value;
@@ -28,12 +31,15 @@ typeSelector.addEventListener('change', (e) => {
         typeSelector.style.display = 'none';
     }
 });
+
 resetButton.addEventListener('click', () => resetState(true));
+
 dropZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('drag-over'); });
 dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });
+
 function handleFiles(files) {
     if (!selectedFundType) {
         alert('請先返回並選擇基金類型！');
@@ -72,6 +78,8 @@ function handleFiles(files) {
         console.error(error);
     });
 }
+
+// --- UI and State Management Functions ---
 function resetState(fullReset = true) {
     allExtractedData = {};
     fundNames = [];
@@ -89,10 +97,12 @@ function resetState(fullReset = true) {
         selectedFundType = null;
     }
 }
+
 function renderControls() {
     controlsContainer.innerHTML = `<div class="control-row"><div class="control-group"><label>檢視模式：</label><div class="mode-selector"><input type="radio" id="mode-individual" name="view-mode" value="individual" checked><label for="mode-individual">個別基金</label><input type="radio" id="mode-sum" name="view-mode" value="sum"><label for="mode-sum">所有基金加總</label><input type="radio" id="mode-compare" name="view-mode" value="compare"><label for="mode-compare">單項比較</label></div></div></div><div class="control-row" id="dynamic-controls"></div>`;
     controlsContainer.querySelector('.mode-selector').addEventListener('change', refreshView);
 }
+
 function refreshView() {
     const selectedMode = document.querySelector('input[name="view-mode"]:checked').value;
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
@@ -107,6 +117,7 @@ function refreshView() {
         displayComparison();
     }
 }
+
 function displayIndividualFund() {
     const selectedFund = document.getElementById('fund-select')?.value;
     if (!selectedFund) return;
@@ -191,16 +202,12 @@ function displayAggregated() {
                 aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
             }
 
-            // ★★★ 新增：計算 "母公司業主" 的邏輯 ★★★
-            // 1. 重新建立 Map 以包含可能新增的項目
             const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
             
-            // 2. 找到相關的三個科目
             const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
             const nonControllingInterestRow = finalDataMap.get('非控制權益');
             const parentOwnerRow = finalDataMap.get('母公司業主');
 
-            // 3. 執行計算
             if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
                 numericCols.forEach(col => {
                     const netIncome = netIncomeRow[col] || 0;
@@ -209,7 +216,6 @@ function displayAggregated() {
                 });
             }
             
-            // 4. 排序
             aggregatedRows.sort((a, b) => {
                 const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
                 const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
@@ -226,7 +232,6 @@ function displayAggregated() {
     initExportButtons();
 }
 
-// (displayComparison, createTabsAndTables, createTableHtml, etc. 維持不變)
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
@@ -301,6 +306,7 @@ function displayComparison() {
         updateComparisonView();
     }
 }
+
 function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     let tabsHtml = '<div class="report-tabs">';
     let contentHtml = '';
@@ -360,6 +366,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     }
     return tabsHtml + contentHtml;
 }
+
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目'];
@@ -390,6 +397,7 @@ function createTableHtml(records, headers, mode = 'default') {
     });
     return table + '</tbody></table>';
 }
+
 function initTabs() {
     const tabs = document.querySelectorAll('.report-tabs .tab-link');
     const contents = document.querySelectorAll('.tab-content');
@@ -410,6 +418,7 @@ function initTabs() {
         }
     }
 }
+
 function initSortableTables() {
     document.querySelectorAll('.sortable').forEach(th => {
         th.addEventListener('click', () => {
@@ -445,6 +454,7 @@ function initSortableTables() {
         });
     });
 }
+
 function initExportButtons() {
     document.querySelectorAll('.export-btn').forEach(button => {
         button.addEventListener('click', (e) => {
@@ -454,6 +464,7 @@ function initExportButtons() {
         });
     });
 }
+
 function createGovernmentalYuchuSummaryTable(aggregatedData) {
     const yuchuData = aggregatedData;
     if (!yuchuData || yuchuData.length === 0) return '<p>無餘絀表資料可顯示。</p>';
@@ -481,3 +492,26 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
             </tr>
             <tr>
                 <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
+                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
+                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>所有基金合計</td>
+                <td>${findValue('基金來源', '預算數')}</td>
+                <td>${findValue('基金用途', '預算數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算數')}</td>
+                <td>${findValue('基金來源', '決算核定數')}</td>
+                <td>${findValue('基金用途', '決算核定數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '決算核定數')}</td>
+                <td>${findValue('基金來源', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('基金用途', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('期初基金餘額', '決算核定數')}</td>
+                <td>${findValue('本期繳庫數', '決算核定數')}</td>
+                <td>${findValue('期末基金餘額', '決算核定數')}</td>
+            </tr>
+        </tbody></table>`;
+    return table;
+}
