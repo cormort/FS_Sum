@@ -1,6 +1,6 @@
 // main.js
 
-import { FULL_CONFIG } from './config.js';
+import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
@@ -122,10 +122,9 @@ function displayIndividualFund() {
 }
 
 
-// ★★★ 修正 displayAggregated 函式 ★★★
+// ★★★ 修正 displayAggregated 函式，加入回退創建機制 ★★★
 function displayAggregated() {
     const summaryData = {};
-    const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
 
     for (const reportKey in allExtractedData) {
         if (!allExtractedData[reportKey]) continue;
@@ -137,17 +136,14 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        // 1. 執行初步加總。因為解析器已經產生了唯一的 key，這裡不會有重複計算問題。
         const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
             if (!originalKeyText) return acc;
-
-            // 使用原始 keyText 進行分組，因為它們已經是唯一的了
             const key = originalKeyText; 
 
             if (!acc[key]) {
-                acc[key] = { ...row }; // 複製第一個遇到的 row 作為基礎
-                numericCols.forEach(col => acc[key][col] = 0); // 重置數值
+                acc[key] = { ...row };
+                numericCols.forEach(col => acc[key][col] = 0);
             }
             numericCols.forEach(col => {
                 let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
@@ -160,7 +156,6 @@ function displayAggregated() {
 
         let aggregatedRows = Object.values(grouped);
 
-        // 2. 如果是營業基金損益表，執行合併中央銀行科目的特殊處理
         if (selectedFundType === 'business' && reportKey === '損益表') {
             const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
 
@@ -169,26 +164,48 @@ function displayAggregated() {
             const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
             const cbankLossName = '事業投資損失';
 
-            const targetProfitRow = dataMap.get(targetProfitName);
+            let targetProfitRow = dataMap.get(targetProfitName);
             const cbankProfitRow = dataMap.get(cbankProfitName);
-            const targetLossRow = dataMap.get(targetLossName);
+            let targetLossRow = dataMap.get(targetLossName);
             const cbankLossRow = dataMap.get(cbankLossName);
 
-            // 合併利益
-            if (targetProfitRow && cbankProfitRow) {
+            // ★★★ 核心修正：合併利益，如果目標不存在則創建它 ★★★
+            if (cbankProfitRow) {
+                if (!targetProfitRow) {
+                    // 創建一個新的 record，並將其加入到結果中
+                    targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
+                    numericCols.forEach(col => targetProfitRow[col] = 0);
+                    aggregatedRows.push(targetProfitRow);
+                    dataMap.set(targetProfitName, targetProfitRow); // 更新 map
+                }
                 numericCols.forEach(col => {
                     targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
                 });
                 aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
             }
 
-            // 合併損失
-            if (targetLossRow && cbankLossRow) {
+            // ★★★ 核心修正：合併損失，如果目標不存在則創建它 ★★★
+            if (cbankLossRow) {
+                if (!targetLossRow) {
+                    // 創建一個新的 record
+                    targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
+                    numericCols.forEach(col => targetLossRow[col] = 0);
+                    aggregatedRows.push(targetLossRow);
+                    dataMap.set(targetLossName, targetLossRow); // 更新 map
+                }
                 numericCols.forEach(col => {
                     targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
                 });
                 aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
             }
+
+            aggregatedRows.sort((a, b) => {
+                const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
+                const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
+                if (indexA === -1) return 1;
+                if (indexB === -1) return -1;
+                return indexA - indexB;
+            });
         }
 
         summaryData[reportKey] = aggregatedRows;
