@@ -1,10 +1,10 @@
-// main.js (最終修正版)
+// main.js
 
-import { FULL_CONFIG } from './config.js'; // 不再需要 CONFIG_BUSINESS 和範本
+import { FULL_CONFIG } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
-// --- Global Variables & UI Elements (維持不變) ---
+// (Global Variables, Event Listeners, handleFiles, resetState, renderControls, refreshView, displayIndividualFund 維持不變)
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 const statusDiv = document.getElementById('status');
@@ -14,14 +14,11 @@ const typeSelector = document.getElementById('type-selector');
 const mainContent = document.getElementById('main-content');
 const resetButton = document.getElementById('reset-button');
 const fundTypeDisplay = document.getElementById('current-fund-type-display');
-
 const DEBUG_MODE = true; 
 let allExtractedData = {};
 let fundNames = [];
 let selectedFundType = null;
 let fundFileMap = {};
-
-// --- Event Listeners & File Handling (維持不變) ---
 typeSelector.addEventListener('change', (e) => {
     if (e.target.name === 'fund-type') {
         selectedFundType = e.target.value;
@@ -37,7 +34,6 @@ fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('drag-over'); });
 dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });
-
 function handleFiles(files) {
     if (!selectedFundType) {
         alert('請先返回並選擇基金類型！');
@@ -76,8 +72,6 @@ function handleFiles(files) {
         console.error(error);
     });
 }
-
-// --- UI and State Management Functions (維持不變) ---
 function resetState(fullReset = true) {
     allExtractedData = {};
     fundNames = [];
@@ -95,12 +89,10 @@ function resetState(fullReset = true) {
         selectedFundType = null;
     }
 }
-
 function renderControls() {
     controlsContainer.innerHTML = `<div class="control-row"><div class="control-group"><label>檢視模式：</label><div class="mode-selector"><input type="radio" id="mode-individual" name="view-mode" value="individual" checked><label for="mode-individual">個別基金</label><input type="radio" id="mode-sum" name="view-mode" value="sum"><label for="mode-sum">所有基金加總</label><input type="radio" id="mode-compare" name="view-mode" value="compare"><label for="mode-compare">單項比較</label></div></div></div><div class="control-row" id="dynamic-controls"></div>`;
     controlsContainer.querySelector('.mode-selector').addEventListener('change', refreshView);
 }
-
 function refreshView() {
     const selectedMode = document.querySelector('input[name="view-mode"]:checked').value;
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
@@ -115,7 +107,6 @@ function refreshView() {
         displayComparison();
     }
 }
-
 function displayIndividualFund() {
     const selectedFund = document.getElementById('fund-select')?.value;
     if (!selectedFund) return;
@@ -130,14 +121,15 @@ function displayIndividualFund() {
     initExportButtons();
 }
 
-// ★★★ 這是修正的核心 ★★★
+
+// ★★★ 修正 displayAggregated 函式 ★★★
 function displayAggregated() {
     const summaryData = {};
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
 
-    for(const reportKey in allExtractedData) {
-        if(!allExtractedData[reportKey]) continue;
-        
+    for (const reportKey in allExtractedData) {
+        if (!allExtractedData[reportKey]) continue;
+
         const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
         const config = FULL_CONFIG[selectedFundType][baseKey];
         if (!config) continue;
@@ -145,72 +137,58 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        // 1. 執行初步的通用加總
+        // 1. 執行初步加總。因為解析器已經產生了唯一的 key，這裡不會有重複計算問題。
         const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
-            if(!originalKeyText) return acc;
-            
-            const key = normalize(originalKeyText);
+            if (!originalKeyText) return acc;
+
+            // 使用原始 keyText 進行分組，因為它們已經是唯一的了
+            const key = originalKeyText; 
 
             if (!acc[key]) {
-                acc[key] = { [keyColumn]: originalKeyText.trim() };
-                numericCols.forEach(col => acc[key][col] = 0);
-                acc[key].indent_level = row.indent_level || 0;
+                acc[key] = { ...row }; // 複製第一個遇到的 row 作為基礎
+                numericCols.forEach(col => acc[key][col] = 0); // 重置數值
             }
             numericCols.forEach(col => {
                 let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
                 if (!isNaN(val)) {
-                    if (selectedFundType === 'business') {
-                        val = Math.round(val);
-                    }
-                    acc[key][col] += val;
+                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
                 }
             });
             return acc;
         }, {});
-        
+
         let aggregatedRows = Object.values(grouped);
 
-        // 2. ★★★ 如果是營業基金損益表，執行特殊處理 ★★★
+        // 2. 如果是營業基金損益表，執行合併中央銀行科目的特殊處理
         if (selectedFundType === 'business' && reportKey === '損益表') {
-            const dataMap = new Map(aggregatedRows.map(row => [normalize(row[keyColumn]), row]));
+            const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
 
             const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
-            const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
             const cbankProfitName = '事業投資利益';
+            const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
             const cbankLossName = '事業投資損失';
 
-            const targetProfitRow = dataMap.get(normalize(targetProfitName));
-            const cbankProfitRow = dataMap.get(normalize(cbankProfitName));
-            const targetLossRow = dataMap.get(normalize(targetLossName));
-            const cbankLossRow = dataMap.get(normalize(cbankLossName));
+            const targetProfitRow = dataMap.get(targetProfitName);
+            const cbankProfitRow = dataMap.get(cbankProfitName);
+            const targetLossRow = dataMap.get(targetLossName);
+            const cbankLossRow = dataMap.get(cbankLossName);
 
-            // 合併事業投資利益
+            // 合併利益
             if (targetProfitRow && cbankProfitRow) {
                 numericCols.forEach(col => {
                     targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
                 });
-                // 從結果中移除 "事業投資利益"
-                aggregatedRows = aggregatedRows.filter(row => normalize(row[keyColumn]) !== normalize(cbankProfitName));
+                aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
             }
 
-            // 合併事業投資損失
+            // 合併損失
             if (targetLossRow && cbankLossRow) {
                 numericCols.forEach(col => {
                     targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
                 });
-                // 從結果中移除 "事業投資損失"
-                aggregatedRows = aggregatedRows.filter(row => normalize(row[keyColumn]) !== normalize(cbankLossName));
+                aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
             }
-
-            // ★★★ 解決重複計算問題 ★★★
-            // 您的規則是，這兩個科目只應出現在營業收入/成本中。
-            // 如果它們也出現在營業外收支中，我們需要將營業外的數值清零。
-            // 這裡我們假設原始資料中，如果一個科目出現多次，加總時已經被合併到一個項目中了。
-            // 如果您的 Excel 檔案中明確區分了 "營業" 和 "營業外" 的 "採用權益法..."，
-            // 那麼在 `reduce` 階段就需要更複雜的 key (例如 `key + '_營業外'`)。
-            // 目前的程式碼假設它們會被 `normalize` 函式合併為一個，我們只需要確保它被正確歸類即可。
-            // 這個合併邏輯已經隱含地解決了重複計算問題，因為所有同名科目都只會被加總一次。
         }
 
         summaryData[reportKey] = aggregatedRows;
@@ -220,8 +198,9 @@ function displayAggregated() {
     initExportButtons();
 }
 
+
+// (displayComparison, createTabsAndTables, createTableHtml, etc. 維持不變)
 function displayComparison() {
-    // (此函式維持不變)
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
     const activeConfig = FULL_CONFIG[selectedFundType];
@@ -295,10 +274,6 @@ function displayComparison() {
         updateComparisonView();
     }
 }
-
-// --- HTML Rendering Functions ---
-
-// ★★★ 修正 createTabsAndTables 函式，移除對營業基金的特殊處理 ★★★
 function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     let tabsHtml = '<div class="report-tabs">';
     let contentHtml = '';
@@ -332,7 +307,6 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
             if (selectedFundType === 'governmental' && reportKey === '餘絀表' && mode === 'sum') {
                 tableContent = createGovernmentalYuchuSummaryTable(data[reportKey]);
             } else {
-                // 所有其他情況，包括營業基金加總，都使用這個通用的、可靠的函式
                 tableContent = createTableHtml(data[reportKey], customHeaders[reportKey] || ['基金名稱', ...columns], mode);
             }
 
@@ -359,8 +333,6 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     }
     return tabsHtml + contentHtml;
 }
-
-// (createTableHtml, initTabs, initSortableTables, initExportButtons, createGovernmentalYuchuSummaryTable 維持不變)
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目'];
