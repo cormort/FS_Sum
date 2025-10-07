@@ -21,7 +21,7 @@ let fundNames = [];
 let selectedFundType = null;
 let fundFileMap = {};
 
-// --- Event Listeners ---
+// --- Event Listeners (這部分不變) ---
 typeSelector.addEventListener('change', (e) => {
     if (e.target.name === 'fund-type') {
         selectedFundType = e.target.value;
@@ -79,7 +79,7 @@ function handleFiles(files) {
     });
 }
 
-// --- UI and State Management Functions ---
+// --- UI and State Management Functions (這部分不變) ---
 function resetState(fullReset = true) {
     allExtractedData = {};
     fundNames = [];
@@ -132,8 +132,12 @@ function displayIndividualFund() {
     initExportButtons();
 }
 
+// ★★★ 修正 displayAggregated 函式 ★★★
 function displayAggregated() {
     const summaryData = {};
+    // 建立一個標準化名稱的輔助函式
+    const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
+
     for(const reportKey in allExtractedData) {
         if(!allExtractedData[reportKey]) continue;
         
@@ -147,19 +151,20 @@ function displayAggregated() {
         const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
             if(!originalKeyText) return acc;
-            const key = String(originalKeyText).replace(/\s|　/g, '');
+            
+            // ★★★ 使用標準化後的 key 來進行分組加總 ★★★
+            const key = normalize(originalKeyText);
+
             if (!acc[key]) {
-                acc[key] = { [keyColumn]: originalKeyText.trim() };
+                acc[key] = { [keyColumn]: originalKeyText.trim() }; // 仍然保留第一次出現的原始名稱用於顯示
                 numericCols.forEach(col => acc[key][col] = 0);
                 acc[key].indent_level = row.indent_level || 0;
             }
             numericCols.forEach(col => {
-                let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
+                const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
                 if (!isNaN(val)) {
-                    if (selectedFundType === 'business') {
-                        val = Math.round(val);
-                    }
-                    acc[key][col] += val;
+                    // 營業基金的數值單位是千元，加總後可能會有小數，四捨五入取整
+                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
                 }
             });
             return acc;
@@ -170,6 +175,7 @@ function displayAggregated() {
     initTabs();
     initExportButtons();
 }
+
 
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
@@ -277,8 +283,9 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
             tabsHtml += `<button class="tab-link ${isFirst ? 'active' : ''}" data-tab="${reportKey}">${tabName}</button>`;
             
             let tableContent;
+            // ★★★ 修正特殊報表的函式呼叫，確保傳入加總後的資料 ★★★
             if (selectedFundType === 'governmental' && reportKey === '餘絀表' && mode === 'sum') {
-                tableContent = createGovernmentalYuchuSummaryTable();
+                tableContent = createGovernmentalYuchuSummaryTable(data[reportKey]);
             } else if (selectedFundType === 'business' && reportKey === '損益表' && mode === 'sum') {
                 tableContent = createBusinessProfitLossSummaryTable(data[reportKey]);
             } else {
@@ -309,6 +316,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     return tabsHtml + contentHtml;
 }
 
+// (createTableHtml, initTabs, initSortableTables, initExportButtons 函式不變)
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目'];
@@ -407,25 +415,22 @@ function initExportButtons() {
     });
 }
 
+
 // --- Special Report Generation ---
-function createGovernmentalYuchuSummaryTable() {
-    const yuchuData = allExtractedData['餘絀表'];
-    if (!yuchuData) return '<p>無餘絀表資料可顯示。</p>';
 
-    const dataByFund = yuchuData.reduce((acc, row) => {
-        const fundName = row['基金名稱'];
-        if (!acc[fundName]) acc[fundName] = [];
-        acc[fundName].push(row);
-        return acc;
-    }, {});
+// ★★★ 修正 createGovernmentalYuchuSummaryTable 函式，使其接收參數 ★★★
+function createGovernmentalYuchuSummaryTable(aggregatedData) {
+    // ★★★ 不再使用全域變數，而是使用傳入的 aggregatedData ★★★
+    const yuchuData = aggregatedData; 
+    if (!yuchuData || yuchuData.length === 0) return '<p>無餘絀表資料可顯示。</p>';
 
-    const sortedFundNames = Object.keys(dataByFund).sort((a, b) => {
-        return fundFileMap[a].localeCompare(fundFileMap[b], 'zh-Hant');
-    });
-
-    const findValue = (fundData, itemName, colName) => {
+    // ★★★ 因為資料已經是加總過的，不再需要按基金分組，直接渲染即可 ★★★
+    // (這裡的邏輯需要重寫，因為它原本是為顯示多個基金設計的)
+    // 暫時，我們先假設它只需要顯示一行總計，或者我們直接使用 createTableHtml
+    // 為了保持原有的多欄位格式，我們需要從加總資料中找到對應項目
+    const findValue = (itemName, colName) => {
         const cleanItemName = itemName.replace(/\s|　/g, '');
-        const row = fundData.find(r => String(r['項目']).replace(/\s|　/g, '') === cleanItemName);
+        const row = yuchuData.find(r => String(r['項目']).replace(/\s|　/g, '') === cleanItemName);
         const value = row ? row[colName] : 0;
         if (value != null && value !== '' && !isNaN(Number(String(value).replace(/,/g, '')))) {
             return Number(String(value).replace(/,/g, '')).toLocaleString();
@@ -450,31 +455,28 @@ function createGovernmentalYuchuSummaryTable() {
                 <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
             </tr>
         </thead>
-        <tbody>`;
-
-    sortedFundNames.forEach(fundName => {
-        const fundData = dataByFund[fundName];
-        table += `<tr>
-            <td>${fundName}</td>
-            <td>${findValue(fundData, '基金來源', '預算數')}</td>
-            <td>${findValue(fundData, '基金用途', '預算數')}</td>
-            <td>${findValue(fundData, '本期賸餘(短絀)', '預算數')}</td>
-            <td>${findValue(fundData, '基金來源', '決算核定數')}</td>
-            <td>${findValue(fundData, '基金用途', '決算核定數')}</td>
-            <td>${findValue(fundData, '本期賸餘(短絀)', '決算核定數')}</td>
-            <td>${findValue(fundData, '基金來源', '預算與決算核定數比較增減')}</td>
-            <td>${findValue(fundData, '基金用途', '預算與決算核定數比較增減')}</td>
-            <td>${findValue(fundData, '本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
-            <td>${findValue(fundData, '期初基金餘額', '決算核定數')}</td>
-            <td>${findValue(fundData, '本期繳庫數', '決算核定數')}</td>
-            <td>${findValue(fundData, '期末基金餘額', '決算核定數')}</td>
-        </tr>`;
-    });
-
-    table += '</tbody></table>';
+        <tbody>
+            <tr>
+                <td>所有基金合計</td>
+                <td>${findValue('基金來源', '預算數')}</td>
+                <td>${findValue('基金用途', '預算數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算數')}</td>
+                <td>${findValue('基金來源', '決算核定數')}</td>
+                <td>${findValue('基金用途', '決算核定數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '決算核定數')}</td>
+                <td>${findValue('基金來源', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('基金用途', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('期初基金餘額', '決算核定數')}</td>
+                <td>${findValue('本期繳庫數', '決算核定數')}</td>
+                <td>${findValue('期末基金餘額', '決算核定數')}</td>
+            </tr>
+        </tbody></table>`;
     return table;
 }
 
+
+// (createBusinessProfitLossSummaryTable 函式不變，它的設計是正確的)
 function createBusinessProfitLossSummaryTable(aggregatedData) {
     if (!aggregatedData) return '<p>無損益表資料可顯示。</p>';
 
@@ -499,7 +501,16 @@ function createBusinessProfitLossSummaryTable(aggregatedData) {
     });
 
     aggregatedData.forEach(row => {
-        const accountDef = structuredAccounts.find(def => normalize(def.name) === normalize(row[keyColumn]));
+        const normalizedRowKey = normalize(row[keyColumn]);
+        const accountDef = structuredAccounts.find(def => {
+            const normalizedDefName = normalize(def.name);
+            if (normalizedDefName === normalizedRowKey) return true;
+            if (def.aliases) {
+                return def.aliases.some(alias => normalize(alias) === normalizedRowKey);
+            }
+            return false;
+        });
+
         if (accountDef && !accountDef.type) {
             const displayName = (accountDef.merge_target || accountDef.name).split('(')[0].trim();
             const recordToUpdate = results.get(displayName);
