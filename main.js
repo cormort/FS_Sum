@@ -4,7 +4,7 @@ import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
-// (Global Variables, Event Listeners, etc. 維持不變)
+// (Global Variables, Event Listeners, handleFiles, resetState, renderControls, refreshView, displayIndividualFund 維持不變)
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 const statusDiv = document.getElementById('status');
@@ -191,6 +191,25 @@ function displayAggregated() {
                 aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
             }
 
+            // ★★★ 新增：計算 "母公司業主" 的邏輯 ★★★
+            // 1. 重新建立 Map 以包含可能新增的項目
+            const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+            
+            // 2. 找到相關的三個科目
+            const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
+            const nonControllingInterestRow = finalDataMap.get('非控制權益');
+            const parentOwnerRow = finalDataMap.get('母公司業主');
+
+            // 3. 執行計算
+            if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
+                numericCols.forEach(col => {
+                    const netIncome = netIncomeRow[col] || 0;
+                    const nonControllingInterest = nonControllingInterestRow[col] || 0;
+                    parentOwnerRow[col] = netIncome - nonControllingInterest;
+                });
+            }
+            
+            // 4. 排序
             aggregatedRows.sort((a, b) => {
                 const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
                 const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
@@ -207,6 +226,7 @@ function displayAggregated() {
     initExportButtons();
 }
 
+// (displayComparison, createTabsAndTables, createTableHtml, etc. 維持不變)
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
@@ -461,26 +481,3 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
             </tr>
             <tr>
                 <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
-                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
-                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>所有基金合計</td>
-                <td>${findValue('基金來源', '預算數')}</td>
-                <td>${findValue('基金用途', '預算數')}</td>
-                <td>${findValue('本期賸餘(短絀)', '預算數')}</td>
-                <td>${findValue('基金來源', '決算核定數')}</td>
-                <td>${findValue('基金用途', '決算核定數')}</td>
-                <td>${findValue('本期賸餘(短絀)', '決算核定數')}</td>
-                <td>${findValue('基金來源', '預算與決算核定數比較增減')}</td>
-                <td>${findValue('基金用途', '預算與決算核定數比較增減')}</td>
-                <td>${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
-                <td>${findValue('期初基金餘額', '決算核定數')}</td>
-                <td>${findValue('本期繳庫數', '決算核定數')}</td>
-                <td>${findValue('期末基金餘額', '決算核定數')}</td>
-            </tr>
-        </tbody></table>`;
-    return table;
-}
