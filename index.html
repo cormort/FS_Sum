@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>附屬單位決算綜計工具</title>
+
+    <!-- 外部函式庫 -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+    <!-- 連結外部 CSS 檔案 -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>附屬單位決算綜計工具</h1>
+        <h2 id="current-fund-type-display"></h2>
+
+        <div id="type-selector">
+            <h2>步驟一：請選擇要處理的基金類型</h2>
+            <div class="type-choice-container">
+                <div class="type-choice">
+                    <input type="radio" id="type-operating" name="fund-type" value="operating">
+                    <label for="type-operating">作業基金</label>
+                </div>
+                <div class="type-choice">
+                    <input type="radio" id="type-governmental" name="fund-type" value="governmental">
+                    <label for="type-governmental">政事基金</label>
+                </div>
+                <div class="type-choice">
+                    <input type="radio" id="type-business" name="fund-type" value="business">
+                    <label for="type-business">營業基金</label>
+                </div>
+            </div>
+        </div>
+
+        <div id="main-content">
+            <button id="reset-button">返回上一步(重新選擇基金種類)</button>
+            <h2>步驟二：拖曳 Excel 檔案至下方區域</h2>
+            <input type="file" id="file-input" multiple accept=".xlsx, .xls" style="display: none;">
+            <div id="drop-zone">拖曳 Excel 檔案至此，或點擊此處選擇檔案</div>
+
+            <div class="controls"></div>
+            <div id="status"></div>
+            <div id="output-container"></div>
+        </div>
+    </div>
+
+    <!-- 連結模組化的 JavaScript 主檔案 -->
+    <script type="module" src="main.js"></script>
+</body>
+</html>
