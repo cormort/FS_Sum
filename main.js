@@ -1,6 +1,6 @@
 // main.js
 
-import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER } from './config.js';
+import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
@@ -165,64 +165,94 @@ function displayAggregated() {
 
         let aggregatedRows = Object.values(grouped);
 
-        if (selectedFundType === 'business' && reportKey === '損益表') {
-            const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+        if (selectedFundType === 'business') {
+            if (reportKey === '損益表') {
+                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
+                const cbankProfitName = '事業投資利益';
+                const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
+                const cbankLossName = '事業投資損失';
+                let targetProfitRow = dataMap.get(targetProfitName);
+                const cbankProfitRow = dataMap.get(cbankProfitName);
+                let targetLossRow = dataMap.get(targetLossName);
+                const cbankLossRow = dataMap.get(cbankLossName);
 
-            const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
-            const cbankProfitName = '事業投資利益';
-            const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
-            const cbankLossName = '事業投資損失';
-
-            let targetProfitRow = dataMap.get(targetProfitName);
-            const cbankProfitRow = dataMap.get(cbankProfitName);
-            let targetLossRow = dataMap.get(targetLossName);
-            const cbankLossRow = dataMap.get(cbankLossName);
-
-            if (cbankProfitRow) {
-                if (!targetProfitRow) {
-                    targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
-                    numericCols.forEach(col => targetProfitRow[col] = 0);
-                    aggregatedRows.push(targetProfitRow);
+                if (cbankProfitRow) {
+                    if (!targetProfitRow) {
+                        targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
+                        numericCols.forEach(col => targetProfitRow[col] = 0);
+                        aggregatedRows.push(targetProfitRow);
+                    }
+                    numericCols.forEach(col => {
+                        targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
+                    });
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
                 }
-                numericCols.forEach(col => {
-                    targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
-                });
-                aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
-            }
 
-            if (cbankLossRow) {
-                if (!targetLossRow) {
-                    targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
-                    numericCols.forEach(col => targetLossRow[col] = 0);
-                    aggregatedRows.push(targetLossRow);
+                if (cbankLossRow) {
+                    if (!targetLossRow) {
+                        targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
+                        numericCols.forEach(col => targetLossRow[col] = 0);
+                        aggregatedRows.push(targetLossRow);
+                    }
+                    numericCols.forEach(col => {
+                        targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
+                    });
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
                 }
-                numericCols.forEach(col => {
-                    targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
-                });
-                aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
-            }
 
-            const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-            
-            const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
-            const nonControllingInterestRow = finalDataMap.get('非控制權益');
-            const parentOwnerRow = finalDataMap.get('母公司業主');
+                const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
+                const nonControllingInterestRow = finalDataMap.get('非控制權益');
+                const parentOwnerRow = finalDataMap.get('母公司業主');
 
-            if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
-                numericCols.forEach(col => {
-                    const netIncome = netIncomeRow[col] || 0;
-                    const nonControllingInterest = nonControllingInterestRow[col] || 0;
-                    parentOwnerRow[col] = netIncome - nonControllingInterest;
+                if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
+                    numericCols.forEach(col => {
+                        const netIncome = netIncomeRow[col] || 0;
+                        const nonControllingInterest = nonControllingInterestRow[col] || 0;
+                        parentOwnerRow[col] = netIncome - nonControllingInterest;
+                    });
+                }
+                
+                aggregatedRows.sort((a, b) => {
+                    const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
+                    const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
+                    if (indexA === -1) return 1;
+                    if (indexB === -1) return -1;
+                    return indexA - indexB;
+                });
+            } 
+            else if (reportKey === '盈虧撥補表') {
+                aggregatedRows.sort((a, b) => {
+                    const indexA = APPROPRIATION_ACCOUNT_ORDER.indexOf(a[keyColumn]);
+                    const indexB = APPROPRIATION_ACCOUNT_ORDER.indexOf(b[keyColumn]);
+                    if (indexA === -1) return 1;
+                    if (indexB === -1) return -1;
+                    return indexA - indexB;
                 });
             }
-            
-            aggregatedRows.sort((a, b) => {
-                const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
-                const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
-                if (indexA === -1) return 1;
-                if (indexB === -1) return -1;
-                return indexA - indexB;
-            });
+            else if (reportKey === '資產負債表_資產') {
+                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const targetRow = dataMap.get('存放銀行同業');
+                const sourceRow = dataMap.get('存放銀行業');
+                if (targetRow && sourceRow) {
+                    numericCols.forEach(col => {
+                        targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                    });
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '存放銀行業');
+                }
+            } 
+            else if (reportKey === '資產負債表_負債及權益') {
+                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const targetRow = dataMap.get('銀行同業存款');
+                const sourceRow = dataMap.get('銀行業存款');
+                if (targetRow && sourceRow) {
+                    numericCols.forEach(col => {
+                        targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                    });
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '銀行業存款');
+                }
+            }
         }
 
         summaryData[reportKey] = aggregatedRows;
