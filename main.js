@@ -4,7 +4,7 @@ import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
-// (Global Variables, Event Listeners, handleFiles, resetState, renderControls, refreshView, displayIndividualFund 維持不變)
+// (Global Variables, Event Listeners, etc. 維持不變)
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 const statusDiv = document.getElementById('status');
@@ -121,8 +121,6 @@ function displayIndividualFund() {
     initExportButtons();
 }
 
-
-// ★★★ 修正 displayAggregated 函式，加入回退創建機制 ★★★
 function displayAggregated() {
     const summaryData = {};
 
@@ -169,14 +167,11 @@ function displayAggregated() {
             let targetLossRow = dataMap.get(targetLossName);
             const cbankLossRow = dataMap.get(cbankLossName);
 
-            // ★★★ 核心修正：合併利益，如果目標不存在則創建它 ★★★
             if (cbankProfitRow) {
                 if (!targetProfitRow) {
-                    // 創建一個新的 record，並將其加入到結果中
                     targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
                     numericCols.forEach(col => targetProfitRow[col] = 0);
                     aggregatedRows.push(targetProfitRow);
-                    dataMap.set(targetProfitName, targetProfitRow); // 更新 map
                 }
                 numericCols.forEach(col => {
                     targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
@@ -184,14 +179,11 @@ function displayAggregated() {
                 aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
             }
 
-            // ★★★ 核心修正：合併損失，如果目標不存在則創建它 ★★★
             if (cbankLossRow) {
                 if (!targetLossRow) {
-                    // 創建一個新的 record
                     targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
                     numericCols.forEach(col => targetLossRow[col] = 0);
                     aggregatedRows.push(targetLossRow);
-                    dataMap.set(targetLossName, targetLossRow); // 更新 map
                 }
                 numericCols.forEach(col => {
                     targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
@@ -215,8 +207,6 @@ function displayAggregated() {
     initExportButtons();
 }
 
-
-// (displayComparison, createTabsAndTables, createTableHtml, etc. 維持不變)
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
