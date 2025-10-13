@@ -199,7 +199,6 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
     return records;
 }
 
-// ★★★ 新增：為營業基金盈虧撥補表設計的有狀態解析器 ★★★
 function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     const records = [];
     const colMap = { '項目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
@@ -254,11 +253,6 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     return records;
 }
 
-function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
-    const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
-    return _parseFixed(data, config, fundName, sheet, 5, colMap);
-}
-
 function parseBusinessBalanceSheet_SideBySide(data, config, fundName, sheet) {
     const assetConfig = { ...config };
     const assetColMap = { '科目': 3, '上年度決算數': 1, '原列決算數': 4, '修正數': 5, '決算核定數': 6 };
@@ -271,7 +265,7 @@ function parseBusinessBalanceSheet_SideBySide(data, config, fundName, sheet) {
     return { '資產負債表_資產': assetRecords, '資產負債表_負債及權益': liabilityRecords };
 }
 
-// 將所有解析器函式放入一個物件中，方便 processFile 呼叫
+// ★★★ 清理：移除不再使用的固定現金流量表解析器 ★★★
 const PARSERS = {
     dynamic_normal: parseNormalTable,
     balance_sheet: parseBalanceSheet,
@@ -280,7 +274,6 @@ const PARSERS = {
     fixed_shouzhi: parseFixedShouzhiBiao,
     fixed_business_profitloss_stateful: parseBusinessProfitLoss_Stateful,
     fixed_business_appropriation_stateful: parseBusinessAppropriation_Stateful,
-    fixed_business_cashflow: parseFixedBusinessCashFlow,
     fixed_business_balancesheet_sidebyside: parseBusinessBalanceSheet_SideBySide,
 };
 
