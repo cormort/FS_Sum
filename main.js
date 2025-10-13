@@ -230,9 +230,11 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產負債表科目合併 (排序法) ★★★
+            // ★★★ 核心修正：資產負債表科目合併 (排序法，確保數據完整) ★★★
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 
+                // Step 1: Perform the merge on a Map for efficiency.
+                // At this point, `aggregatedRows` contains the correct SUM for ALL accounts.
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
                 
@@ -275,13 +277,13 @@ function displayAggregated() {
                     });
                 }
                 
-                // 從 dataMap 中移除來源科目，這樣就不會出現在最終結果裡
+                // From the complete map, remove only the source rows that were merged.
                 rowsToRemove.forEach(key => dataMap.delete(key));
 
-                // 從合併後的 dataMap 取得最終的資料陣列，此時數值和科目都是正確的
+                // `finalRows` now contains ALL necessary accounts with their CORRECT merged values.
                 let finalRows = Array.from(dataMap.values());
 
-                // 取得台糖的科目順序作為樣板
+                // Step 2: Get the standard order from the Taisugar template.
                 const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
                 if (standardFundName) {
                     const standardOrder = allExtractedData[reportKey]
@@ -289,17 +291,17 @@ function displayAggregated() {
                         .map(row => row[keyColumn]);
                     
                     if (standardOrder.length > 0) {
-                        // 使用樣板順序來排序最終結果
+                        // Step 3: Sort `finalRows` based on the standard order. This is non-destructive.
                         finalRows.sort((a, b) => {
                             const keyA = a[keyColumn];
                             const keyB = b[keyColumn];
                             const indexA = standardOrder.indexOf(keyA);
                             const indexB = standardOrder.indexOf(keyB);
 
-                            if (indexA !== -1 && indexB !== -1) return indexA - indexB; // 兩者都在樣板中，按樣板順序排
-                            if (indexA !== -1) return -1; // 只有 A 在樣板中，A 排前面
-                            if (indexB !== -1) return 1;  // 只有 B 在樣板中，B 排前面
-                            return 0; // 兩者都不在樣板中，維持相對順序
+                            if (indexA !== -1 && indexB !== -1) return indexA - indexB; // Both in template: sort by template order
+                            if (indexA !== -1) return -1; // Only A is in template: A comes first
+                            if (indexB !== -1) return 1;  // Only B is in template: B comes first
+                            return 0; // Neither in template: maintain relative order
                         });
                     }
                 }
