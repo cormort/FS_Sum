@@ -199,6 +199,7 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
     return records;
 }
 
+// ★★★ 新增：為營業基金盈虧撥補表設計的有狀態解析器 ★★★
 function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     const records = [];
     const colMap = { '項目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
@@ -253,7 +254,6 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     return records;
 }
 
-// ★★★ 恢復營業基金專用的現金流量表解析器 ★★★
 function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
     return _parseFixed(data, config, fundName, sheet, 5, colMap);
@@ -280,7 +280,6 @@ const PARSERS = {
     fixed_shouzhi: parseFixedShouzhiBiao,
     fixed_business_profitloss_stateful: parseBusinessProfitLoss_Stateful,
     fixed_business_appropriation_stateful: parseBusinessAppropriation_Stateful,
-    // ★★★ 重新加入恢復的解析器 ★★★
     fixed_business_cashflow: parseFixedBusinessCashFlow,
     fixed_business_balancesheet_sidebyside: parseBusinessBalanceSheet_SideBySide,
 };
