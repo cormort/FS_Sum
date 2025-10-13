@@ -54,8 +54,6 @@ function handleFiles(files) {
 
     Promise.all(filePromises).then(results => {
         const successfulResults = results.filter(r => r);
-        // Do not sort here, let user control order if needed, or sort by a fixed logic later.
-        // successfulResults.sort((a, b) => a.fileName.localeCompare(b.fileName, 'zh-Hant'));
         
         successfulResults.forEach(r => { fundFileMap[r.fundName] = r.fileName; });
         fundNames = successfulResults.map(r => r.fundName);
@@ -232,10 +230,9 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產負債表科目合併 (以台糖為樣板) ★★★
+            // ★★★ 核心修正：資產負債表科目合併 (以台糖為樣板並確保結構完整) ★★★
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 
-                // --- STEP 1: 建立台糖的科目結構樣板 ---
                 const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
                 let structureTemplate = [];
                 if (standardFundName) {
@@ -244,7 +241,6 @@ function displayAggregated() {
                         .map(row => ({ [keyColumn]: row[keyColumn], indent_level: row.indent_level }));
                 }
 
-                // --- STEP 2: 執行合併邏輯，取得包含所有正確數值的 dataMap ---
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
                 const mergeRules = {
@@ -282,27 +278,27 @@ function displayAggregated() {
                         }
                     });
                 }
-                // 在 dataMap 中移除來源科目，以便後續重建
                 rowsToRemove.forEach(key => dataMap.delete(key));
 
-                // --- STEP 3: 根據樣板重建報表順序 ---
                 if (structureTemplate.length > 0) {
                     const finalRows = [];
                     const processedKeys = new Set();
-
-                    // 優先按照台糖樣板的順序和縮排填入資料
+                    
                     structureTemplate.forEach(templateItem => {
                         const key = templateItem[keyColumn];
                         if (dataMap.has(key)) {
                             const rowData = dataMap.get(key);
-                            // 確保縮排也使用樣板的
                             rowData.indent_level = templateItem.indent_level; 
                             finalRows.push(rowData);
-                            processedKeys.add(key);
+                        } else {
+                            // ★★★ 關鍵修正：如果樣板科目不存在於合併資料中，主動建立空行 ★★★
+                            const newEmptyRow = { [keyColumn]: key, indent_level: templateItem.indent_level };
+                            numericCols.forEach(col => newEmptyRow[col] = 0);
+                            finalRows.push(newEmptyRow);
                         }
+                        processedKeys.add(key);
                     });
 
-                    // 將樣板中沒有、但合併後依然存在的其他科目，加到報表末尾
                     dataMap.forEach((rowData, key) => {
                         if (!processedKeys.has(key)) {
                             finalRows.push(rowData);
