@@ -401,7 +401,7 @@ function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目', '基金名稱']; // 基金名稱和科目/項目都應靠左
     table += headers.map(h => {
-        const isSortable = mode === 'comparison' && !['基金名稱', ...keyColumns].includes(h);
+        const isSortable = mode === 'comparison' && !keyColumns.includes(h);
         return `<th class="${isSortable ? 'sortable' : ''}" data-column-key="${h}">${h} <span class="sort-arrow"></span></th>`;
     }).join('');
     table += '</tr></thead><tbody>';
@@ -414,21 +414,26 @@ function createTableHtml(records, headers, mode = 'default') {
             const isKeyColumn = keyColumns.includes(header);
             const indentLevel = record.indent_level || record.indent || 0;
             let style = '';
-            let className = ''; // 新增 className
+            let className = '';
 
             if (isKeyColumn) {
                 // 科目/項目/基金名稱靠左對齊
                 if (header !== '基金名稱' && indentLevel > 0) {
                     style = `padding-left: ${1 + indentLevel * 1.5}em;`;
                 }
-                className = 'text-left'; // 保持預設靠左
             } else {
                 // 數值欄位靠右對齊
-                const isNumericField = val != null && val !== '' && !isNaN(Number(String(val).replace(/,/g, ''))));
+                const rawVal = String(val).replace(/,/g, '');
+                const isNumericField = val != null && val !== '' && !isNaN(Number(rawVal)) && isFinite(Number(rawVal));
+                
                 if (isNumericField) {
-                     displayVal = Number(String(val).replace(/,/g, '')).toLocaleString();
+                     displayVal = Number(rawVal).toLocaleString();
+                     className = 'numeric-data'; 
+                } else if (val != null && val !== '') {
+                    // 非數字但有內容的欄位，例如 '-' 或文字說明，保持靠左
+                } else {
+                    displayVal = '';
                 }
-                className = 'numeric-data'; 
             }
             
             table += `<td class="${className}" style="${style}">${displayVal}</td>`;
