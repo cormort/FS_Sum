@@ -274,10 +274,14 @@ function displayAggregated() {
                         }
                     });
                 }
+                
+                // 從 dataMap 中移除來源科目，這樣就不會出現在最終結果裡
                 rowsToRemove.forEach(key => dataMap.delete(key));
 
+                // 從合併後的 dataMap 取得最終的資料陣列，此時數值和科目都是正確的
                 let finalRows = Array.from(dataMap.values());
 
+                // 取得台糖的科目順序作為樣板
                 const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
                 if (standardFundName) {
                     const standardOrder = allExtractedData[reportKey]
@@ -285,16 +289,17 @@ function displayAggregated() {
                         .map(row => row[keyColumn]);
                     
                     if (standardOrder.length > 0) {
+                        // 使用樣板順序來排序最終結果
                         finalRows.sort((a, b) => {
                             const keyA = a[keyColumn];
                             const keyB = b[keyColumn];
                             const indexA = standardOrder.indexOf(keyA);
                             const indexB = standardOrder.indexOf(keyB);
 
-                            if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-                            if (indexA !== -1) return -1;
-                            if (indexB !== -1) return 1;
-                            return 0;
+                            if (indexA !== -1 && indexB !== -1) return indexA - indexB; // 兩者都在樣板中，按樣板順序排
+                            if (indexA !== -1) return -1; // 只有 A 在樣板中，A 排前面
+                            if (indexB !== -1) return 1;  // 只有 B 在樣板中，B 排前面
+                            return 0; // 兩者都不在樣板中，維持相對順序
                         });
                     }
                 }
