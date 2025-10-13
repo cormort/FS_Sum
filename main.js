@@ -269,6 +269,7 @@ function displayAggregated() {
                 
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
+                
                 const mergeRules = {
                     '資產負債表_資產': [
                         { target: '存放銀行同業', sources: ['存放銀行業'] }, // '存放央行' is now a separate item
@@ -282,7 +283,7 @@ function displayAggregated() {
                         { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
                     ]
                 };
-
+                
                 const activeMergeRules = mergeRules[reportKey];
                 if (activeMergeRules) {
                     activeMergeRules.forEach(rule => {
@@ -308,8 +309,8 @@ function displayAggregated() {
 
                 let finalRows = [];
                 const processedKeys = new Set();
-
                 let standardOrder = [];
+
                 if (reportKey === '資產負債表_資產') {
                     standardOrder = PUBLIC_ASSET_ORDER;
                 } else if (reportKey === '資產負債表_負債及權益') {
@@ -317,7 +318,6 @@ function displayAggregated() {
                 }
                 
                 if (standardOrder.length > 0) {
-                    // ★★★ 核心修正：按樣板重建報表，確保結構完整 ★★★
                     standardOrder.forEach(key => {
                         if (dataMap.has(key)) {
                             finalRows.push(dataMap.get(key));
