@@ -145,38 +145,39 @@ function displayAggregated() {
 
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
-
-        // ★★★ 徹底修正加總邏輯 ★★★
-        const grouped = allExtractedData[reportKey].reduce((acc, row) => {
+        
+        // ★★★ 終極修正：重寫加總邏輯，確保唯一性和正確性 ★★★
+        const aggregatedMap = new Map();
+        allExtractedData[reportKey].forEach(row => {
             const originalKeyText = row[keyColumn];
-            if (!originalKeyText) return acc;
+            if (!originalKeyText) return;
 
             const key = normalizeKey(originalKeyText);
-            if (!key) return acc;
+            if (!key) return;
 
-            if (!acc[key]) {
-                // 當第一次遇到這個項目時，建立一個新的紀錄
-                // 並且將科目名稱設為原始（但清理過）的文字，以保持一致性
-                acc[key] = { ...row }; // 複製 indent_level 等屬性
-                acc[key][keyColumn] = originalKeyText.trim(); // 使用清理過的原始文字
-                numericCols.forEach(col => acc[key][col] = 0); // 數字歸零
+            let aggregatedRow = aggregatedMap.get(key);
+
+            if (!aggregatedRow) {
+                aggregatedRow = {
+                    [keyColumn]: String(originalKeyText).trim(), // 儲存清理過的顯示名稱
+                    'indent_level': row.indent_level || 0
+                };
+                numericCols.forEach(col => aggregatedRow[col] = 0);
+                aggregatedMap.set(key, aggregatedRow);
             }
 
-            // 累加所有數字欄位
             numericCols.forEach(col => {
-                let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
+                const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
                 if (!isNaN(val)) {
-                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
+                    aggregatedRow[col] += (selectedFundType === 'business' ? Math.round(val) : val);
                 }
             });
-            return acc;
-        }, {});
+        });
 
-        let aggregatedRows = Object.values(grouped);
+        let aggregatedRows = Array.from(aggregatedMap.values());
 
         if (selectedFundType === 'business') {
-            const getSortFunction = (orderArray) => (a, b) => {
-                // ★★★ 排序時也使用標準化後的 key 來比對 ★★★
+             const getSortFunction = (orderArray) => (a, b) => {
                 const indexA = orderArray.indexOf(normalizeKey(a[keyColumn]));
                 const indexB = orderArray.indexOf(normalizeKey(b[keyColumn]));
                 if (indexA === -1) return 1;
@@ -185,44 +186,46 @@ function displayAggregated() {
             };
 
             if (reportKey === '損益表') {
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
-                const cbankProfitName = '事業投資利益';
-                const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
-                const cbankLossName = '事業投資損失';
-                let targetProfitRow = dataMap.get(targetProfitName);
-                const cbankProfitRow = dataMap.get(cbankProfitName);
-                let targetLossRow = dataMap.get(targetLossName);
-                const cbankLossRow = dataMap.get(cbankLossName);
+                const dataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
+                const targetProfitName = normalizeKey('採用權益法認列之關聯企業及合資利益之份額');
+                const cbankProfitName = normalizeKey('事業投資利益');
+                const targetLossName = normalizeKey('採用權益法認列之關聯企業及合資損失之份額');
+                const cbankLossName = normalizeKey('事業投資損失');
 
+                const cbankProfitRow = dataMap.get(cbankProfitName);
                 if (cbankProfitRow) {
+                    let targetProfitRow = dataMap.get(targetProfitName);
                     if (!targetProfitRow) {
-                        targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
+                        targetProfitRow = { [keyColumn]: '採用權益法認列之關聯企業及合資利益之份額', indent_level: cbankProfitRow.indent_level };
                         numericCols.forEach(col => targetProfitRow[col] = 0);
                         aggregatedRows.push(targetProfitRow);
+                        dataMap.set(targetProfitName, targetProfitRow);
                     }
                     numericCols.forEach(col => {
                         targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
                     });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
+                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== cbankProfitName);
                 }
-
+                
+                const cbankLossRow = dataMap.get(cbankLossName);
                 if (cbankLossRow) {
+                    let targetLossRow = dataMap.get(targetLossName);
                     if (!targetLossRow) {
-                        targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
+                        targetLossRow = { [keyColumn]: '採用權益法認列之關聯企業及合資損失之份額', indent_level: cbankLossRow.indent_level };
                         numericCols.forEach(col => targetLossRow[col] = 0);
                         aggregatedRows.push(targetLossRow);
+                        dataMap.set(targetLossName, targetLossRow);
                     }
-                    numericCols.forEach(col => {
+                     numericCols.forEach(col => {
                         targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
                     });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
+                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== cbankLossName);
                 }
 
-                const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
-                const nonControllingInterestRow = finalDataMap.get('非控制權益');
-                const parentOwnerRow = finalDataMap.get('母公司業主');
+                const finalDataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
+                const netIncomeRow = finalDataMap.get(normalizeKey('本期淨利（淨損）'));
+                const nonControllingInterestRow = finalDataMap.get(normalizeKey('非控制權益'));
+                const parentOwnerRow = finalDataMap.get(normalizeKey('母公司業主'));
 
                 if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
                     numericCols.forEach(col => {
@@ -241,25 +244,25 @@ function displayAggregated() {
                 aggregatedRows.sort(getSortFunction(CASH_FLOW_ACCOUNT_ORDER));
             }
             else if (reportKey === '資產負債表_資產') {
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const targetRow = dataMap.get('存放銀行同業');
-                const sourceRow = dataMap.get('存放銀行業');
+                const dataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
+                const targetRow = dataMap.get(normalizeKey('存放銀行同業'));
+                const sourceRow = dataMap.get(normalizeKey('存放銀行業'));
                 if (targetRow && sourceRow) {
                     numericCols.forEach(col => {
                         targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
                     });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '存放銀行業');
+                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== normalizeKey('存放銀行業'));
                 }
             } 
             else if (reportKey === '資產負債表_負債及權益') {
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const targetRow = dataMap.get('銀行同業存款');
-                const sourceRow = dataMap.get('銀行業存款');
+                const dataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
+                const targetRow = dataMap.get(normalizeKey('銀行同業存款'));
+                const sourceRow = dataMap.get(normalizeKey('銀行業存款'));
                 if (targetRow && sourceRow) {
                     numericCols.forEach(col => {
                         targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
                     });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '銀行業存款');
+                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== normalizeKey('銀行業存款'));
                 }
             }
         }
@@ -571,3 +574,4 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         </tbody></table>`;
     return table;
 }
+```--- END OF FILE main.js ---
