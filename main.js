@@ -235,6 +235,7 @@ function displayAggregated() {
                 
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
+                
                 const mergeRules = {
                     '資產負債表_資產': [
                         { target: '存放銀行同業', sources: ['存放銀行業', '存放央行'] },
@@ -248,18 +249,22 @@ function displayAggregated() {
                         { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
                     ]
                 };
+
                 const activeMergeRules = mergeRules[reportKey];
                 if (activeMergeRules) {
                     activeMergeRules.forEach(rule => {
                         const existingSourceRows = rule.sources.map(sourceName => dataMap.get(sourceName)).filter(Boolean);
+                        
                         if (existingSourceRows.length > 0) {
                             let targetRow = dataMap.get(rule.target);
+
                             if (!targetRow) {
                                 const templateRow = existingSourceRows[0];
                                 targetRow = { ...templateRow, [keyColumn]: rule.target };
                                 numericCols.forEach(col => targetRow[col] = 0);
                                 dataMap.set(rule.target, targetRow);
                             }
+                            
                             existingSourceRows.forEach(sourceRow => {
                                 numericCols.forEach(col => {
                                     targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
@@ -271,18 +276,15 @@ function displayAggregated() {
                 }
                 rowsToRemove.forEach(key => dataMap.delete(key));
 
-                // 從合併後的 dataMap 取得最終的資料陣列
                 let finalRows = Array.from(dataMap.values());
 
-                // 取得台糖的科目順序作為樣板
                 const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
                 if (standardFundName) {
                     const standardOrder = allExtractedData[reportKey]
                         .filter(row => row['基金名稱'] === standardFundName)
                         .map(row => row[keyColumn]);
-
+                    
                     if (standardOrder.length > 0) {
-                        // 使用樣板順序來排序最終結果
                         finalRows.sort((a, b) => {
                             const keyA = a[keyColumn];
                             const keyB = b[keyColumn];
@@ -292,7 +294,7 @@ function displayAggregated() {
                             if (indexA !== -1 && indexB !== -1) return indexA - indexB;
                             if (indexA !== -1) return -1;
                             if (indexB !== -1) return 1;
-                            return 0; 
+                            return 0;
                         });
                     }
                 }
