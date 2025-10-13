@@ -268,11 +268,10 @@ function displayAggregated() {
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const rowsToRemove = new Set();
                 
                 const mergeRules = {
                     '資產負債表_資產': [
-                        { target: '存放銀行同業', sources: ['存放銀行業'] }, // '存放央行' is now a separate item
+                        { target: '存放銀行同業', sources: ['存放銀行業'] },
                         { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] },
                         { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'] }
                     ],
@@ -283,32 +282,12 @@ function displayAggregated() {
                         { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
                     ]
                 };
-                
-                const activeMergeRules = mergeRules[reportKey];
-                if (activeMergeRules) {
-                    activeMergeRules.forEach(rule => {
-                        const existingSourceRows = rule.sources.map(sourceName => dataMap.get(sourceName)).filter(Boolean);
-                        if (existingSourceRows.length > 0) {
-                            let targetRow = dataMap.get(rule.target);
-                            if (!targetRow) {
-                                const templateRow = existingSourceRows[0];
-                                targetRow = { ...templateRow, [keyColumn]: rule.target };
-                                numericCols.forEach(col => targetRow[col] = 0);
-                                dataMap.set(rule.target, targetRow);
-                            }
-                            existingSourceRows.forEach(sourceRow => {
-                                numericCols.forEach(col => {
-                                    targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
-                                });
-                                rowsToRemove.add(sourceRow[keyColumn]);
-                            });
-                        }
-                    });
-                }
-                rowsToRemove.forEach(key => dataMap.delete(key));
 
+                const activeMergeRules = mergeRules[reportKey] || [];
+                const allSourceKeys = new Set(activeMergeRules.flatMap(rule => rule.sources));
+
+                // Rebuild the report based on the public template
                 let finalRows = [];
-                const processedKeys = new Set();
                 let standardOrder = [];
 
                 if (reportKey === '資產負債表_資產') {
@@ -316,28 +295,51 @@ function displayAggregated() {
                 } else if (reportKey === '資產負債表_負債及權益') {
                     standardOrder = PUBLIC_LIABILITY_ORDER;
                 }
-                
+
                 if (standardOrder.length > 0) {
-                    standardOrder.forEach(key => {
-                        if (dataMap.has(key)) {
-                            finalRows.push(dataMap.get(key));
-                        } else {
-                            const newEmptyRow = { [keyColumn]: key, indent_level: 0 };
-                            numericCols.forEach(col => newEmptyRow[col] = 0);
-                            finalRows.push(newEmptyRow);
+                    standardOrder.forEach(templateKey => {
+                        const newRow = { [keyColumn]: templateKey, indent_level: 0 };
+                        numericCols.forEach(col => newRow[col] = 0);
+
+                        // Case 1: The template key is a target for a merge rule.
+                        const mergeRule = activeMergeRules.find(rule => rule.target === templateKey);
+                        if (mergeRule) {
+                            // Sum the target itself if it exists
+                            if (dataMap.has(templateKey)) {
+                                const sourceRow = dataMap.get(templateKey);
+                                numericCols.forEach(col => {
+                                    newRow[col] += (sourceRow[col] || 0);
+                                });
+                            }
+                            // Sum all sources for this target
+                            mergeRule.sources.forEach(sourceKey => {
+                                if (dataMap.has(sourceKey)) {
+                                    const sourceRow = dataMap.get(sourceKey);
+                                    numericCols.forEach(col => {
+                                        newRow[col] += (sourceRow[col] || 0);
+                                    });
+                                }
+                            });
+                        } 
+                        // Case 2: The template key is a normal account that exists in the data.
+                        else if (dataMap.has(templateKey)) {
+                            const sourceRow = dataMap.get(templateKey);
+                            numericCols.forEach(col => {
+                                newRow[col] += (sourceRow[col] || 0);
+                            });
                         }
-                        processedKeys.add(key);
+                        
+                        finalRows.push(newRow);
                     });
 
+                    // Add any remaining items from dataMap that were NOT in the template and NOT a source for merging.
                     dataMap.forEach((rowData, key) => {
-                        if (!processedKeys.has(key)) {
+                        if (!standardOrder.includes(key) && !allSourceKeys.has(key)) {
                             finalRows.push(rowData);
                         }
                     });
-                    
+
                     aggregatedRows = finalRows;
-                } else {
-                    aggregatedRows = Array.from(dataMap.values());
                 }
             }
         }
