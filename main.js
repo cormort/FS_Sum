@@ -54,7 +54,8 @@ function handleFiles(files) {
 
     Promise.all(filePromises).then(results => {
         const successfulResults = results.filter(r => r);
-        successfulResults.sort((a, b) => a.fileName.localeCompare(b.fileName, 'zh-Hant'));
+        // Do not sort here, let user control order if needed, or sort by a fixed logic later.
+        // successfulResults.sort((a, b) => a.fileName.localeCompare(b.fileName, 'zh-Hant'));
         
         successfulResults.forEach(r => { fundFileMap[r.fundName] = r.fileName; });
         fundNames = successfulResults.map(r => r.fundName);
@@ -231,18 +232,25 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產負債表科目合併 (強制建立基準科目版) ★★★
+            // ★★★ 核心修正：資產負債表科目合併 (以台糖為樣板) ★★★
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
+                
+                // --- STEP 1: 建立台糖的科目結構樣板 ---
+                const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
+                let structureTemplate = [];
+                if (standardFundName) {
+                    structureTemplate = allExtractedData[reportKey]
+                        .filter(row => row['基金名稱'] === standardFundName)
+                        .map(row => ({ [keyColumn]: row[keyColumn], indent_level: row.indent_level }));
+                }
+
+                // --- STEP 2: 執行合併邏輯，取得包含所有正確數值的 dataMap ---
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
-                
                 const mergeRules = {
                     '資產負債表_資產': [
                         { target: '存放銀行同業', sources: ['存放銀行業', '存放央行'] },
-                        { 
-                            target: '押匯貼現及放款', 
-                            sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] 
-                        },
+                        { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] },
                         { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'] }
                     ],
                     '資產負債表_負債及權益': [
@@ -252,16 +260,12 @@ function displayAggregated() {
                         { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
                     ]
                 };
-
                 const activeMergeRules = mergeRules[reportKey];
-
                 if (activeMergeRules) {
                     activeMergeRules.forEach(rule => {
                         const existingSourceRows = rule.sources.map(sourceName => dataMap.get(sourceName)).filter(Boolean);
-                        
                         if (existingSourceRows.length > 0) {
                             let targetRow = dataMap.get(rule.target);
-
                             if (!targetRow) {
                                 const templateRow = existingSourceRows[0];
                                 targetRow = { ...templateRow, [keyColumn]: rule.target };
@@ -269,7 +273,6 @@ function displayAggregated() {
                                 aggregatedRows.push(targetRow);
                                 dataMap.set(rule.target, targetRow);
                             }
-
                             existingSourceRows.forEach(sourceRow => {
                                 numericCols.forEach(col => {
                                     targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
@@ -278,10 +281,35 @@ function displayAggregated() {
                             });
                         }
                     });
+                }
+                // 在 dataMap 中移除來源科目，以便後續重建
+                rowsToRemove.forEach(key => dataMap.delete(key));
 
-                    if (rowsToRemove.size > 0) {
-                        aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
-                    }
+                // --- STEP 3: 根據樣板重建報表順序 ---
+                if (structureTemplate.length > 0) {
+                    const finalRows = [];
+                    const processedKeys = new Set();
+
+                    // 優先按照台糖樣板的順序和縮排填入資料
+                    structureTemplate.forEach(templateItem => {
+                        const key = templateItem[keyColumn];
+                        if (dataMap.has(key)) {
+                            const rowData = dataMap.get(key);
+                            // 確保縮排也使用樣板的
+                            rowData.indent_level = templateItem.indent_level; 
+                            finalRows.push(rowData);
+                            processedKeys.add(key);
+                        }
+                    });
+
+                    // 將樣板中沒有、但合併後依然存在的其他科目，加到報表末尾
+                    dataMap.forEach((rowData, key) => {
+                        if (!processedKeys.has(key)) {
+                            finalRows.push(rowData);
+                        }
+                    });
+                    
+                    aggregatedRows = finalRows;
                 }
             }
         }
