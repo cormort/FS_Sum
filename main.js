@@ -231,41 +231,8 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 新增：營業基金現金流量表的重複科目合併邏輯 ★★★
-            // ★★★ 修正：營業基金現金流量表的重複科目合併邏輯 ★★★
-            else if (reportKey === '現金流量表') {
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const rowsToRemove = new Set();
-                
-                // 定義可能在不同活動中重複出現的通用科目名稱
-                const itemsToConsolidate = ['收取利息', '收取股利', '支付利息'];
-
-                itemsToConsolidate.forEach(item => {
-                    // 檢查是否存在一個不帶活動標記的通用（總計）項目
-                    const genericKey = item;
-                    const hasGeneric = dataMap.has(genericKey);
-
-                    // 檢查是否存在至少一個帶有特定活動標記的項目
-                    const activityKeys = [' (營業活動)', ' (投資活動)', ' (籌資活動)'].map(suffix => item + suffix);
-                    const hasSpecific = activityKeys.some(key => dataMap.has(key));
-
-                    // 核心邏輯：
-                    // 如果同時存在通用項目和特定活動項目，
-                    // 我們就認定該通用項目是一個多餘的、會造成重複計算的總計行，因此需要將其移除。
-                    if (hasGeneric && hasSpecific) {
-                        if (DEBUG_MODE) {
-                            console.log(`[現金流量表合併] 偵測到多餘的總計項目，將其移除: "${genericKey}"`);
-                        }
-                        rowsToRemove.add(genericKey);
-                    }
-                });
-
-                // 從結果中過濾掉被標記為要移除的行
-                if (rowsToRemove.size > 0) {
-                    aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
-                }
-            }
-            // ★★★ 修正結束 ★★★
+            // ★★★ 已移除針對現金流量表的特殊處理邏輯 ★★★
+            // 因為 parser.js 已經將科目名稱唯一化，這裡的通用邏輯可以直接處理
             else if (reportKey === '資產負債表_資產') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const targetRow = dataMap.get('存放銀行同業');
@@ -314,7 +281,7 @@ function displayComparison() {
         const tabName = reportKey.replace(/_/g, ' ');
 
         if (items.length > 0) {
-             optionsHtml += `<optgroup label="${tabName}">${items.map(item => `<option value="${reportKey}::${item}">${item}</option>`).join('')}</optgroup>`;
+            optionsHtml += `<optgroup label="${tabName}">${items.map(item => `<option value="${reportKey}::${item}">${item}</option>`).join('')}</optgroup>`;
         }
     });
 
@@ -434,7 +401,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
 
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
-    const keyColumns = ['科目', '項目', '基金名稱']; // 基金名稱和科目/項目都應靠左
+    const keyColumns = ['科目', '項目', '基金名稱']; 
     table += headers.map(h => {
         const isSortable = mode === 'comparison' && !keyColumns.includes(h);
         return `<th class="${isSortable ? 'sortable' : ''}" data-column-key="${h}">${h} <span class="sort-arrow"></span></th>`;
@@ -452,20 +419,18 @@ function createTableHtml(records, headers, mode = 'default') {
             let className = '';
 
             if (isKeyColumn) {
-                // 科目/項目/基金名稱靠左對齊
                 if (header !== '基金名稱' && indentLevel > 0) {
                     style = `padding-left: ${1 + indentLevel * 1.5}em;`;
                 }
             } else {
-                // 數值欄位靠右對齊
                 const rawVal = String(val).replace(/,/g, '');
                 const isNumericField = val != null && val !== '' && !isNaN(Number(rawVal)) && isFinite(Number(rawVal));
                 
                 if (isNumericField) {
-                     displayVal = Number(rawVal).toLocaleString();
-                     className = 'numeric-data'; 
+                    displayVal = Number(rawVal).toLocaleString();
+                    className = 'numeric-data'; 
                 } else if (val != null && val !== '') {
-                    // 非數字但有內容的欄位，例如 '-' 或文字說明，保持靠左
+                    // Non-numeric but non-empty stays left-aligned
                 } else {
                     displayVal = '';
                 }
