@@ -4,18 +4,12 @@ import { FULL_CONFIG } from './config.js';
 import { findSheet, extractFundName, findHeaderRowIndex, getHeaderMapping } from './utils.js';
 
 // --- Helper function to apply suffixes based on item occurrence order ---
-/**
- * Applies suffixes to cash flow items based on their order of appearance.
- * @param {Array<Object>} records - The array of records for a single file.
- * @param {string} keyColumn - The name of the column containing the account name.
- * @returns {Array<Object>} A new array with modified records.
- */
 function applyCashFlowSuffixesByOrder(records, keyColumn) {
     const itemCounter = {
         '收取利息': 0,
         '收取股利': 0,
         '支付利息': 0,
-        '發放現金股利': 0 // ★★★ 新增此項目 ★★★
+        '發放現金股利': 0
     };
     const targetItems = Object.keys(itemCounter);
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
@@ -29,15 +23,12 @@ function applyCashFlowSuffixesByOrder(records, keyColumn) {
             const count = itemCounter[normalizedKey];
             let suffix = '';
 
-            // ★★★ 核心邏輯修改 ★★★
             if (count === 1) {
-                // 第一次出現的所有目標項目都視為營業活動
                 suffix = ' (營業活動)';
             } else if (count === 2) {
-                // 第二次出現時，根據不同項目應用不同後綴
                 if (normalizedKey === '支付利息' || normalizedKey === '發放現金股利') {
                     suffix = ' (籌資活動)';
-                } else { // '收取利息' and '收取股利'
+                } else {
                     suffix = ' (投資活動)';
                 }
             }
@@ -49,7 +40,6 @@ function applyCashFlowSuffixesByOrder(records, keyColumn) {
         return record;
     });
 }
-
 
 // --- Generic Parsers ---
 function _parseFixed(data, config, fundName, sheet, startRow, colMap) {
@@ -121,6 +111,7 @@ function parseNormalTable(data, config, fundName, sheet) {
 }
 
 function _parseSideBySide(data, config, fundName, sheet) {
+    // This function remains the same
     const headerRowIndex = findHeaderRowIndex(data, config.columns);
     if (headerRowIndex === -1) return [];
     let tableStartCol = 0;
@@ -164,6 +155,7 @@ function _parseSideBySide(data, config, fundName, sheet) {
 }
 
 function parseBalanceSheet(data, fundName, sheet) {
+    // This function remains the same
     const assetConfig = { keyColumn: '科目', columns: ['科目', '本年度決算核定數', '上年度決算審定數', '比較增減'], subTableIdentifier: '資產' };
     const liabilityConfig = { keyColumn: '科目', columns: ['科目', '本年度決算核定數', '上年度決算審定數', '比較增減'], subTableIdentifier: '負債' };
     const assetRecords = _parseSideBySide(data, assetConfig, fundName, sheet);
@@ -187,6 +179,7 @@ function parseFixedShouzhiBiao(data, config, fundName, sheet) {
 
 // --- Business Fund Parsers ---
 function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
+    // This function remains the same
     const records = [];
     const colMap = { '科目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
     const keyColIndex = colMap[config.keyColumn];
@@ -235,6 +228,7 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
 }
 
 function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
+    // This function remains the same
     const records = [];
     const colMap = { '項目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
     const keyColIndex = colMap[config.keyColumn];
@@ -279,12 +273,57 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     return records;
 }
 
+// ★★★ 核心修正：現金流量表專用解析器 ★★★
 function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
+    const records = [];
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
-    return _parseFixed(data, config, fundName, sheet, 5, colMap);
+    const keyColIndex = colMap[config.keyColumn];
+    const startRow = 5;
+
+    for (let i = startRow; i < data.length; i++) {
+        const row = data[i];
+        if (!Array.isArray(row) || row.length === 0) continue;
+
+        const keyText = String(row[keyColIndex] || '').trim();
+        if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
+
+        const record = { '基金名稱': fundName, [config.keyColumn]: keyText };
+        let hasMeaningfulData = false;
+        
+        config.columns.forEach(colName => {
+            const colIndex = colMap[colName];
+            if (colIndex !== undefined) {
+                const value = row[colIndex];
+                record[colName] = value;
+                if (colName !== config.keyColumn && value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
+                    hasMeaningfulData = true;
+                }
+            } else {
+                record[colName] = '';
+            }
+        });
+        
+        let indentLevel = 0;
+        try {
+            const cellAddress = XLSX.utils.encode_cell({ r: i, c: keyColIndex });
+            if (sheet[cellAddress]?.s?.alignment?.indent) indentLevel = sheet[cellAddress].s.alignment.indent;
+        } catch(e) {}
+        record.indent_level = indentLevel;
+
+        if (hasMeaningfulData || keyText) {
+            records.push(record);
+        }
+
+        // ★★★ 新增邏輯：如果讀到此行，就結束迴圈 ★★★
+        if (keyText.includes('期末現金及約當現金')) {
+            break; 
+        }
+    }
+    return records;
 }
 
 function parseBusinessBalanceSheet_SideBySide(data, config, fundName, sheet) {
+    // This function remains the same
     const assetConfig = { ...config };
     const assetColMap = { '科目': 3, '上年度決算數': 1, '原列決算數': 4, '修正數': 5, '決算核定數': 6 };
     const assetRecords = _parseFixed(data, assetConfig, fundName, sheet, 6, assetColMap);
