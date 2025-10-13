@@ -400,9 +400,19 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目'];
+
     table += headers.map(h => {
-        const isSortable = mode === 'comparison' && !['基金名稱', ...keyColumns].includes(h);
-        return `<th class="${isSortable ? 'sortable' : ''}" data-column-key="${h}">${h} <span class="sort-arrow"></span></th>`;
+        const isNumericField = !['基金名稱', ...keyColumns].includes(h);
+        const isSortable = mode === 'comparison' && isNumericField;
+        let thClasses = [];
+        if (isSortable) {
+            thClasses.push('sortable');
+        }
+        if (isNumericField) {
+            thClasses.push('numeric');
+        }
+        const classAttr = thClasses.length > 0 ? ` class="${thClasses.join(' ')}"` : '';
+        return `<th${classAttr} data-column-key="${h}">${h} <span class="sort-arrow"></span></th>`;
     }).join('');
     table += '</tr></thead><tbody>';
 
@@ -414,14 +424,21 @@ function createTableHtml(records, headers, mode = 'default') {
             const isKeyColumn = keyColumns.includes(header);
             const indentLevel = record.indent_level || record.indent || 0;
             let style = '';
+            let tdClass = '';
+
             if (isKeyColumn && indentLevel > 0) {
                 style = `padding-left: ${1 + indentLevel * 1.5}em;`;
             }
             const isNumericField = !['基金名稱', ...keyColumns].includes(header);
-            if (isNumericField && val != null && val !== '' && !isNaN(Number(String(val).replace(/,/g, '')))) {
-                 displayVal = Number(String(val).replace(/,/g, '')).toLocaleString();
+            if (isNumericField) {
+                tdClass = 'numeric';
+                if (val != null && val !== '' && !isNaN(Number(String(val).replace(/,/g, '')))) {
+                     displayVal = Number(String(val).replace(/,/g, '')).toLocaleString();
+                }
             }
-            table += `<td style="${style}">${displayVal}</td>`;
+            const classAttr = tdClass ? ` class="${tdClass}"` : '';
+            const styleAttr = style ? ` style="${style}"` : '';
+            table += `<td${classAttr}${styleAttr}>${displayVal}</td>`;
         });
         table += '</tr>';
     });
@@ -513,34 +530,34 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         <thead>
             <tr>
                 <th rowspan="2">基金別</th>
-                <th colspan="3">預算數</th>
-                <th colspan="3">決算核定數</th>
-                <th colspan="3">決算核定數與預算數比較</th>
-                <th rowspan="2">期初基金餘額</th>
-                <th rowspan="2">本期繳庫數</th>
-                <th rowspan="2">期末基金餘額</th>
+                <th colspan="3" style="text-align: center;">預算數</th>
+                <th colspan="3" style="text-align: center;">決算核定數</th>
+                <th colspan="3" style="text-align: center;">決算核定數與預算數比較</th>
+                <th rowspan="2" class="numeric">期初基金餘額</th>
+                <th rowspan="2" class="numeric">本期繳庫數</th>
+                <th rowspan="2" class="numeric">期末基金餘額</th>
             </tr>
             <tr>
-                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
-                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
-                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
+                <th class="numeric">基金來源</th><th class="numeric">基金用途</th><th class="numeric">賸餘(短絀)</th>
+                <th class="numeric">基金來源</th><th class="numeric">基金用途</th><th class="numeric">賸餘(短絀)</th>
+                <th class="numeric">基金來源</th><th class="numeric">基金用途</th><th class="numeric">賸餘(短絀)</th>
             </tr>
         </thead>
         <tbody>
             <tr>
                 <td>所有基金合計</td>
-                <td>${findValue('基金來源', '預算數')}</td>
-                <td>${findValue('基金用途', '預算數')}</td>
-                <td>${findValue('本期賸餘(短絀)', '預算數')}</td>
-                <td>${findValue('基金來源', '決算核定數')}</td>
-                <td>${findValue('基金用途', '決算核定數')}</td>
-                <td>${findValue('本期賸餘(短絀)', '決算核定數')}</td>
-                <td>${findValue('基金來源', '預算與決算核定數比較增減')}</td>
-                <td>${findValue('基金用途', '預算與決算核定數比較增減')}</td>
-                <td>${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
-                <td>${findValue('期初基金餘額', '決算核定數')}</td>
-                <td>${findValue('本期繳庫數', '決算核定數')}</td>
-                <td>${findValue('期末基金餘額', '決算核定數')}</td>
+                <td class="numeric">${findValue('基金來源', '預算數')}</td>
+                <td class="numeric">${findValue('基金用途', '預算數')}</td>
+                <td class="numeric">${findValue('本期賸餘(短絀)', '預算數')}</td>
+                <td class="numeric">${findValue('基金來源', '決算核定數')}</td>
+                <td class="numeric">${findValue('基金用途', '決算核定數')}</td>
+                <td class="numeric">${findValue('本期賸餘(短絀)', '決算核定數')}</td>
+                <td class="numeric">${findValue('基金來源', '預算與決算核定數比較增減')}</td>
+                <td class="numeric">${findValue('基金用途', '預算與決算核定數比較增減')}</td>
+                <td class="numeric">${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
+                <td class="numeric">${findValue('期初基金餘額', '決算核定數')}</td>
+                <td class="numeric">${findValue('本期繳庫數', '決算核定數')}</td>
+                <td class="numeric">${findValue('期末基金餘額', '決算核定數')}</td>
             </tr>
         </tbody></table>`;
     return table;
