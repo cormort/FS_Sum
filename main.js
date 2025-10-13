@@ -4,6 +4,41 @@ import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER } f
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
+// ★★★ 新增：內建公版資產負債表科目順序樣板 ★★★
+const PUBLIC_ASSET_ORDER = [
+    "資產", "流動資產", "現金", "存放銀行同業", "存放央行", "流動金融資產", "應收款項", 
+    "本期所得稅資產", "黃金與白銀", "存貨", "消耗性生物資產－流動", "生產性生物資產－流動", 
+    "預付款項", "短期墊款", "待出售非流動資產", "合約資產－流動", "其他流動資產", 
+    "押匯貼現及放款", "押匯及貼現", "短期放款及透支", "短期擔保放款及透支", "中期放款", 
+    "中期擔保放款", "長期放款", "長期擔保放款", "銀行業融通", "基金、投資及長期應收款", 
+    "基金", "非流動金融資產", "採用權益法之投資", "其他長期投資", "長期應收款項", 
+    "再保險準備資產", "合約資產－非流動", "不動產、廠房及設備", "土地", "土地改良物", 
+    "房屋及建築", "機械及設備", "交通及運輸設備", "什項設備", "租賃權益改良", 
+    "購建中固定資產", "核能燃料", "生產性植物", "使用權資產", "投資性不動產", 
+    "投資性不動產－土地", "投資性不動產－土地改良物", "投資性不動產－房屋及建築", 
+    "投資性不動產－租賃權益改良", "建造中之投資性不動產", "無形資產", "累計減損－無形資產", 
+    "生物資產", "消耗性生物資產－非流動", "生產性生物資產－非流動", "其他資產", 
+    "遞延資產", "遞延所得稅資產", "待整理資產", "什項資產", "合　　計"
+];
+
+const PUBLIC_LIABILITY_ORDER = [
+    "負債", "流動負債", "短期債務", "央行存款", "銀行同業存款", "國際金融機構存款", 
+    "應付款項", "本期所得稅負債", "發行券幣", "預收款項", "流動金融負債", 
+    "與待出售處分群組直接相關之負債", "合約負債－流動", "其他流動負債", "存款、匯款及金融債券", 
+    "支票存款", "活期存款", "定期存款", "儲蓄存款", "匯款", "金融債券", "央行及同業融資", 
+    "央行融資", "同業融資", "長期負債", "長期債務", "租賃負債", "非流動金融負債", "其他負債", 
+    "負債準備", "遞延負債", "遞延所得稅負債", "待整理負債", "合約負債－非流動", "什項負債", 
+    "權益", "資本", "預收資本", "資本公積", "保留盈餘（或累積虧損）", "已指撥保留盈餘", 
+    "未指撥保留盈餘", "累積虧損", "累積其他綜合損益", "國外營運機構財務報表換算之兌換差額", 
+    "現金流量避險中屬有效避險部分之避險工具利益（損失）", 
+    "國外營運機構淨投資避險中屬有效避險部分之避險工具利益（損失）", "不動產重估增值", 
+    "與待出售非流動資產直接相關之權益", "確定福利計畫之再衡量數", 
+    "指定為透過損益按公允價值衡量之金融負債其變動金額來自信用風險", 
+    "透過其他綜合損益按公允價值衡量之金融資產損益", "採用覆蓋法重分類之其他綜合損益", 
+    "其他權益－其他", "庫藏股票", "首次採用國際財務報導準則調整數", "非控制權益", "合　　計"
+];
+
+
 // --- Global Variables & UI Elements ---
 const dropZone = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
@@ -230,14 +265,10 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產負債表科目合併 (排序法，確保數據完整) ★★★
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 
-                // Step 1: Perform the merge on a Map for efficiency.
-                // At this point, `aggregatedRows` contains the correct SUM for ALL accounts.
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
-                
                 const mergeRules = {
                     '資產負債表_資產': [
                         { target: '存放銀行同業', sources: ['存放銀行業', '存放央行'] },
@@ -251,22 +282,18 @@ function displayAggregated() {
                         { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
                     ]
                 };
-
                 const activeMergeRules = mergeRules[reportKey];
                 if (activeMergeRules) {
                     activeMergeRules.forEach(rule => {
                         const existingSourceRows = rule.sources.map(sourceName => dataMap.get(sourceName)).filter(Boolean);
-                        
                         if (existingSourceRows.length > 0) {
                             let targetRow = dataMap.get(rule.target);
-
                             if (!targetRow) {
                                 const templateRow = existingSourceRows[0];
                                 targetRow = { ...templateRow, [keyColumn]: rule.target };
                                 numericCols.forEach(col => targetRow[col] = 0);
                                 dataMap.set(rule.target, targetRow);
                             }
-                            
                             existingSourceRows.forEach(sourceRow => {
                                 numericCols.forEach(col => {
                                     targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
@@ -276,34 +303,29 @@ function displayAggregated() {
                         }
                     });
                 }
-                
-                // From the complete map, remove only the source rows that were merged.
                 rowsToRemove.forEach(key => dataMap.delete(key));
 
-                // `finalRows` now contains ALL necessary accounts with their CORRECT merged values.
                 let finalRows = Array.from(dataMap.values());
 
-                // Step 2: Get the standard order from the Taisugar template.
-                const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
-                if (standardFundName) {
-                    const standardOrder = allExtractedData[reportKey]
-                        .filter(row => row['基金名稱'] === standardFundName)
-                        .map(row => row[keyColumn]);
-                    
-                    if (standardOrder.length > 0) {
-                        // Step 3: Sort `finalRows` based on the standard order. This is non-destructive.
-                        finalRows.sort((a, b) => {
-                            const keyA = a[keyColumn];
-                            const keyB = b[keyColumn];
-                            const indexA = standardOrder.indexOf(keyA);
-                            const indexB = standardOrder.indexOf(keyB);
+                let standardOrder = [];
+                if (reportKey === '資產負債表_資產') {
+                    standardOrder = PUBLIC_ASSET_ORDER;
+                } else if (reportKey === '資產負債表_負債及權益') {
+                    standardOrder = PUBLIC_LIABILITY_ORDER;
+                }
+                
+                if (standardOrder.length > 0) {
+                    finalRows.sort((a, b) => {
+                        const keyA = a[keyColumn];
+                        const keyB = b[keyColumn];
+                        const indexA = standardOrder.indexOf(keyA);
+                        const indexB = standardOrder.indexOf(keyB);
 
-                            if (indexA !== -1 && indexB !== -1) return indexA - indexB; // Both in template: sort by template order
-                            if (indexA !== -1) return -1; // Only A is in template: A comes first
-                            if (indexB !== -1) return 1;  // Only B is in template: B comes first
-                            return 0; // Neither in template: maintain relative order
-                        });
-                    }
+                        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+                        if (indexA !== -1) return -1;
+                        if (indexB !== -1) return 1;
+                        return String(keyA).localeCompare(String(keyB), 'zh-Hant');
+                    });
                 }
                 
                 aggregatedRows = finalRows;
