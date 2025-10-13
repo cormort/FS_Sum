@@ -232,62 +232,38 @@ function displayAggregated() {
                 });
             }
             // ★★★ 新增：營業基金現金流量表的重複科目合併邏輯 ★★★
+            // ★★★ 修正：營業基金現金流量表的重複科目合併邏輯 ★★★
             else if (reportKey === '現金流量表') {
-                const mergeItems = ['收取利息', '收取股利', '支付利息'];
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
                 
-                // Helper to normalize item name for finding the activity-specific key
-                const getNormalizedKey = (name) => {
-                    const normalized = String(name || '').trim().replace(/\s|　/g, '').split('(')[0];
-                    return normalized;
-                };
+                // 定義可能在不同活動中重複出現的通用科目名稱
+                const itemsToConsolidate = ['收取利息', '收取股利', '支付利息'];
 
-                aggregatedRows.forEach(row => {
-                    const keyText = row[keyColumn];
-                    const normalizedKey = getNormalizedKey(keyText);
+                itemsToConsolidate.forEach(item => {
+                    // 檢查是否存在一個不帶活動標記的通用（總計）項目
+                    const genericKey = item;
+                    const hasGeneric = dataMap.has(genericKey);
 
-                    // 檢查是否是需要合併的項目，並且沒有活動標記 (表示它是一個冗餘總計行)
-                    if (mergeItems.includes(normalizedKey) && !keyText.includes('(營業活動)') && !keyText.includes('(投資活動)') && !keyText.includes('(籌資活動)')) {
-                        
-                        // 嘗試尋找對應的帶有活動標記的行來合併
-                        let targetRow = null;
-                        
-                        // 為了安全起見，我們必須知道它屬於哪個活動。
-                        // 由於單純的 '收取利息' 通常是營業活動下的總計行，但有些報表可能放在別處。
-                        // 由於 parser.js 無法知道原始的 '收取利息' 屬於哪個活動，
-                        // 我們假設這些未標記的總計行應該被合併到 '營業活動' 的對應行。
+                    // 檢查是否存在至少一個帶有特定活動標記的項目
+                    const activityKeys = [' (營業活動)', ' (投資活動)', ' (籌資活動)'].map(suffix => item + suffix);
+                    const hasSpecific = activityKeys.some(key => dataMap.has(key));
 
-                        const activityMarkers = [' (營業活動)', ' (投資活動)', ' (籌資活動)'];
-                        
-                        // 嘗試合併到所有帶有標記的行
-                        let merged = false;
-                        activityMarkers.forEach(marker => {
-                            const targetKey = normalizedKey + marker;
-                            targetRow = dataMap.get(targetKey);
-
-                            if (targetRow) {
-                                numericCols.forEach(col => {
-                                    let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
-                                    if (!isNaN(val)) {
-                                        targetRow[col] = (targetRow[col] || 0) + (selectedFundType === 'business' ? Math.round(val) : val);
-                                    }
-                                });
-                                rowsToRemove.add(keyText);
-                                merged = true;
-                            }
-                        });
-
-                        // 如果沒有被合併 (理論上不應該發生，除非解析器出了問題，或者它是唯一的總計行)
-                        if (!merged) {
-                            // 保持它，但不應重複計算
+                    // 核心邏輯：
+                    // 如果同時存在通用項目和特定活動項目，
+                    // 我們就認定該通用項目是一個多餘的、會造成重複計算的總計行，因此需要將其移除。
+                    if (hasGeneric && hasSpecific) {
+                        if (DEBUG_MODE) {
+                            console.log(`[現金流量表合併] 偵測到多餘的總計項目，將其移除: "${genericKey}"`);
                         }
-
+                        rowsToRemove.add(genericKey);
                     }
                 });
 
-                // 移除被合併的冗餘行
-                aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
+                // 從結果中過濾掉被標記為要移除的行
+                if (rowsToRemove.size > 0) {
+                    aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
+                }
             }
             // ★★★ 修正結束 ★★★
             else if (reportKey === '資產負債表_資產') {
