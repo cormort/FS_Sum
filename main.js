@@ -230,17 +230,9 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產負債表科目合併 (以台糖為樣板並確保結構完整) ★★★
+            // ★★★ 核心修正：資產負債表科目合併 (排序法) ★★★
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 
-                const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
-                let structureTemplate = [];
-                if (standardFundName) {
-                    structureTemplate = allExtractedData[reportKey]
-                        .filter(row => row['基金名稱'] === standardFundName)
-                        .map(row => ({ [keyColumn]: row[keyColumn], indent_level: row.indent_level }));
-                }
-
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
                 const mergeRules = {
@@ -266,7 +258,6 @@ function displayAggregated() {
                                 const templateRow = existingSourceRows[0];
                                 targetRow = { ...templateRow, [keyColumn]: rule.target };
                                 numericCols.forEach(col => targetRow[col] = 0);
-                                aggregatedRows.push(targetRow);
                                 dataMap.set(rule.target, targetRow);
                             }
                             existingSourceRows.forEach(sourceRow => {
@@ -280,33 +271,33 @@ function displayAggregated() {
                 }
                 rowsToRemove.forEach(key => dataMap.delete(key));
 
-                if (structureTemplate.length > 0) {
-                    const finalRows = [];
-                    const processedKeys = new Set();
-                    
-                    structureTemplate.forEach(templateItem => {
-                        const key = templateItem[keyColumn];
-                        if (dataMap.has(key)) {
-                            const rowData = dataMap.get(key);
-                            rowData.indent_level = templateItem.indent_level; 
-                            finalRows.push(rowData);
-                        } else {
-                            // ★★★ 關鍵修正：如果樣板科目不存在於合併資料中，主動建立空行 ★★★
-                            const newEmptyRow = { [keyColumn]: key, indent_level: templateItem.indent_level };
-                            numericCols.forEach(col => newEmptyRow[col] = 0);
-                            finalRows.push(newEmptyRow);
-                        }
-                        processedKeys.add(key);
-                    });
+                // 從合併後的 dataMap 取得最終的資料陣列
+                let finalRows = Array.from(dataMap.values());
 
-                    dataMap.forEach((rowData, key) => {
-                        if (!processedKeys.has(key)) {
-                            finalRows.push(rowData);
-                        }
-                    });
-                    
-                    aggregatedRows = finalRows;
+                // 取得台糖的科目順序作為樣板
+                const standardFundName = fundNames.find(name => name.includes('台糖') || name.includes('台灣糖業'));
+                if (standardFundName) {
+                    const standardOrder = allExtractedData[reportKey]
+                        .filter(row => row['基金名稱'] === standardFundName)
+                        .map(row => row[keyColumn]);
+
+                    if (standardOrder.length > 0) {
+                        // 使用樣板順序來排序最終結果
+                        finalRows.sort((a, b) => {
+                            const keyA = a[keyColumn];
+                            const keyB = b[keyColumn];
+                            const indexA = standardOrder.indexOf(keyA);
+                            const indexB = standardOrder.indexOf(keyB);
+
+                            if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+                            if (indexA !== -1) return -1;
+                            if (indexB !== -1) return 1;
+                            return 0; 
+                        });
+                    }
                 }
+                
+                aggregatedRows = finalRows;
             }
         }
 
