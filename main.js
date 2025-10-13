@@ -231,65 +231,6 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 新增：營業基金現金流量表的重複科目合併邏輯 ★★★
-            else if (reportKey === '現金流量表') {
-                const mergeItems = ['收取利息', '收取股利', '支付利息'];
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const rowsToRemove = new Set();
-                
-                // Helper to normalize item name for finding the activity-specific key
-                const getNormalizedKey = (name) => {
-                    const normalized = String(name || '').trim().replace(/\s|　/g, '').split('(')[0];
-                    return normalized;
-                };
-
-                aggregatedRows.forEach(row => {
-                    const keyText = row[keyColumn];
-                    const normalizedKey = getNormalizedKey(keyText);
-
-                    // 檢查是否是需要合併的項目，並且沒有活動標記 (表示它是一個冗餘總計行)
-                    if (mergeItems.includes(normalizedKey) && !keyText.includes('(營業活動)') && !keyText.includes('(投資活動)') && !keyText.includes('(籌資活動)')) {
-                        
-                        // 嘗試尋找對應的帶有活動標記的行來合併
-                        let targetRow = null;
-                        
-                        // 為了安全起見，我們必須知道它屬於哪個活動。
-                        // 由於單純的 '收取利息' 通常是營業活動下的總計行，但有些報表可能放在別處。
-                        // 由於 parser.js 無法知道原始的 '收取利息' 屬於哪個活動，
-                        // 我們假設這些未標記的總計行應該被合併到 '營業活動' 的對應行。
-
-                        const activityMarkers = [' (營業活動)', ' (投資活動)', ' (籌資活動)'];
-                        
-                        // 嘗試合併到所有帶有標記的行
-                        let merged = false;
-                        activityMarkers.forEach(marker => {
-                            const targetKey = normalizedKey + marker;
-                            targetRow = dataMap.get(targetKey);
-
-                            if (targetRow) {
-                                numericCols.forEach(col => {
-                                    let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
-                                    if (!isNaN(val)) {
-                                        targetRow[col] = (targetRow[col] || 0) + (selectedFundType === 'business' ? Math.round(val) : val);
-                                    }
-                                });
-                                rowsToRemove.add(keyText);
-                                merged = true;
-                            }
-                        });
-
-                        // 如果沒有被合併 (理論上不應該發生，除非解析器出了問題，或者它是唯一的總計行)
-                        if (!merged) {
-                            // 保持它，但不應重複計算
-                        }
-
-                    }
-                });
-
-                // 移除被合併的冗餘行
-                aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
-            }
-            // ★★★ 修正結束 ★★★
             else if (reportKey === '資產負債表_資產') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const targetRow = dataMap.get('存放銀行同業');
@@ -458,9 +399,9 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
 
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
-    const keyColumns = ['科目', '項目', '基金名稱']; // 基金名稱和科目/項目都應靠左
+    const keyColumns = ['科目', '項目'];
     table += headers.map(h => {
-        const isSortable = mode === 'comparison' && !keyColumns.includes(h);
+        const isSortable = mode === 'comparison' && !['基金名稱', ...keyColumns].includes(h);
         return `<th class="${isSortable ? 'sortable' : ''}" data-column-key="${h}">${h} <span class="sort-arrow"></span></th>`;
     }).join('');
     table += '</tr></thead><tbody>';
@@ -473,29 +414,14 @@ function createTableHtml(records, headers, mode = 'default') {
             const isKeyColumn = keyColumns.includes(header);
             const indentLevel = record.indent_level || record.indent || 0;
             let style = '';
-            let className = '';
-
-            if (isKeyColumn) {
-                // 科目/項目/基金名稱靠左對齊
-                if (header !== '基金名稱' && indentLevel > 0) {
-                    style = `padding-left: ${1 + indentLevel * 1.5}em;`;
-                }
-            } else {
-                // 數值欄位靠右對齊
-                const rawVal = String(val).replace(/,/g, '');
-                const isNumericField = val != null && val !== '' && !isNaN(Number(rawVal)) && isFinite(Number(rawVal));
-                
-                if (isNumericField) {
-                     displayVal = Number(rawVal).toLocaleString();
-                     className = 'numeric-data'; 
-                } else if (val != null && val !== '') {
-                    // 非數字但有內容的欄位，例如 '-' 或文字說明，保持靠左
-                } else {
-                    displayVal = '';
-                }
+            if (isKeyColumn && indentLevel > 0) {
+                style = `padding-left: ${1 + indentLevel * 1.5}em;`;
             }
-            
-            table += `<td class="${className}" style="${style}">${displayVal}</td>`;
+            const isNumericField = !['基金名稱', ...keyColumns].includes(header);
+            if (isNumericField && val != null && val !== '' && !isNaN(Number(String(val).replace(/,/g, '')))) {
+                 displayVal = Number(String(val).replace(/,/g, '')).toLocaleString();
+            }
+            table += `<td style="${style}">${displayVal}</td>`;
         });
         table += '</tr>';
     });
@@ -603,18 +529,18 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         <tbody>
             <tr>
                 <td>所有基金合計</td>
-                <td class="numeric-data">${findValue('基金來源', '預算數')}</td>
-                <td class="numeric-data">${findValue('基金用途', '預算數')}</td>
-                <td class="numeric-data">${findValue('本期賸餘(短絀)', '預算數')}</td>
-                <td class="numeric-data">${findValue('基金來源', '決算核定數')}</td>
-                <td class="numeric-data">${findValue('基金用途', '決算核定數')}</td>
-                <td class="numeric-data">${findValue('本期賸餘(短絀)', '決算核定數')}</td>
-                <td class="numeric-data">${findValue('基金來源', '預算與決算核定數比較增減')}</td>
-                <td class="numeric-data">${findValue('基金用途', '預算與決算核定數比較增減')}</td>
-                <td class="numeric-data">${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
-                <td class="numeric-data">${findValue('期初基金餘額', '決算核定數')}</td>
-                <td class="numeric-data">${findValue('本期繳庫數', '決算核定數')}</td>
-                <td class="numeric-data">${findValue('期末基金餘額', '決算核定數')}</td>
+                <td>${findValue('基金來源', '預算數')}</td>
+                <td>${findValue('基金用途', '預算數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算數')}</td>
+                <td>${findValue('基金來源', '決算核定數')}</td>
+                <td>${findValue('基金用途', '決算核定數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '決算核定數')}</td>
+                <td>${findValue('基金來源', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('基金用途', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('期初基金餘額', '決算核定數')}</td>
+                <td>${findValue('本期繳庫數', '決算核定數')}</td>
+                <td>${findValue('期末基金餘額', '決算核定數')}</td>
             </tr>
         </tbody></table>`;
     return table;
