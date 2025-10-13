@@ -134,6 +134,7 @@ function displayIndividualFund() {
 
 function displayAggregated() {
     const summaryData = {};
+    const normalizeKey = (key) => String(key || '').replace(/\s|　/g, '');
 
     for (const reportKey in allExtractedData) {
         if (!allExtractedData[reportKey]) continue;
@@ -145,21 +146,27 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        // ★★★ 修改加總邏輯，使用正規化的 key 來避免空白字元造成的重複問題 ★★★
+        // ★★★ 徹底修正加總邏輯 ★★★
         const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
             if (!originalKeyText) return acc;
 
-            const normalizedKey = String(originalKeyText).replace(/\s|　/g, '');
+            const key = normalizeKey(originalKeyText);
+            if (!key) return acc;
 
-            if (!acc[normalizedKey]) {
-                acc[normalizedKey] = { ...row };
-                numericCols.forEach(col => acc[normalizedKey][col] = 0);
+            if (!acc[key]) {
+                // 當第一次遇到這個項目時，建立一個新的紀錄
+                // 並且將科目名稱設為原始（但清理過）的文字，以保持一致性
+                acc[key] = { ...row }; // 複製 indent_level 等屬性
+                acc[key][keyColumn] = originalKeyText.trim(); // 使用清理過的原始文字
+                numericCols.forEach(col => acc[key][col] = 0); // 數字歸零
             }
+
+            // 累加所有數字欄位
             numericCols.forEach(col => {
                 let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
                 if (!isNaN(val)) {
-                    acc[normalizedKey][col] += (selectedFundType === 'business' ? Math.round(val) : val);
+                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
                 }
             });
             return acc;
@@ -168,6 +175,15 @@ function displayAggregated() {
         let aggregatedRows = Object.values(grouped);
 
         if (selectedFundType === 'business') {
+            const getSortFunction = (orderArray) => (a, b) => {
+                // ★★★ 排序時也使用標準化後的 key 來比對 ★★★
+                const indexA = orderArray.indexOf(normalizeKey(a[keyColumn]));
+                const indexB = orderArray.indexOf(normalizeKey(b[keyColumn]));
+                if (indexA === -1) return 1;
+                if (indexB === -1) return -1;
+                return indexA - indexB;
+            };
+
             if (reportKey === '損益表') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
@@ -216,32 +232,13 @@ function displayAggregated() {
                     });
                 }
                 
-                aggregatedRows.sort((a, b) => {
-                    const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
-                    const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
-                    if (indexA === -1) return 1;
-                    if (indexB === -1) return -1;
-                    return indexA - indexB;
-                });
+                aggregatedRows.sort(getSortFunction(PROFIT_LOSS_ACCOUNT_ORDER));
             } 
             else if (reportKey === '盈虧撥補表') {
-                aggregatedRows.sort((a, b) => {
-                    const indexA = APPROPRIATION_ACCOUNT_ORDER.indexOf(a[keyColumn]);
-                    const indexB = APPROPRIATION_ACCOUNT_ORDER.indexOf(b[keyColumn]);
-                    if (indexA === -1) return 1;
-                    if (indexB === -1) return -1;
-                    return indexA - indexB;
-                });
+                aggregatedRows.sort(getSortFunction(APPROPRIATION_ACCOUNT_ORDER));
             }
-            // ★★★ 新增現金流量表的排序邏輯 ★★★
             else if (reportKey === '現金流量表') {
-                aggregatedRows.sort((a, b) => {
-                    const indexA = CASH_FLOW_ACCOUNT_ORDER.indexOf(a[keyColumn]);
-                    const indexB = CASH_FLOW_ACCOUNT_ORDER.indexOf(b[keyColumn]);
-                    if (indexA === -1) return 1;
-                    if (indexB === -1) return -1;
-                    return indexA - indexB;
-                });
+                aggregatedRows.sort(getSortFunction(CASH_FLOW_ACCOUNT_ORDER));
             }
             else if (reportKey === '資產負債表_資產') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
