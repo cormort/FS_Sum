@@ -232,7 +232,6 @@ function displayAggregated() {
                 });
             }
             // ★★★ 已移除針對現金流量表的特殊處理邏輯 ★★★
-            // 因為 parser.js 已經將科目名稱唯一化，這裡的通用邏輯可以直接處理
             else if (reportKey === '資產負債表_資產') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const targetRow = dataMap.get('存放銀行同業');
