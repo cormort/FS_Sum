@@ -231,7 +231,7 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產負債表科目合併 (最完整規則版) ★★★
+            // ★★★ 核心修正：資產負債表科目合併 (強制建立基準科目版) ★★★
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
@@ -257,31 +257,28 @@ function displayAggregated() {
 
                 if (activeMergeRules) {
                     activeMergeRules.forEach(rule => {
-                        let targetRow = dataMap.get(rule.target);
+                        const existingSourceRows = rule.sources.map(sourceName => dataMap.get(sourceName)).filter(Boolean);
                         
-                        // 檢查所有來源科目，看是否有任何一個存在
-                        const existingSources = rule.sources.map(s => dataMap.get(s)).filter(Boolean);
-                        if (existingSources.length === 0) return; // 沒有任何來源科目，無需合併
+                        if (existingSourceRows.length > 0) {
+                            let targetRow = dataMap.get(rule.target);
 
-                        // 如果目標科目不存在，但有來源科目存在，就主動建立目標科目
-                        if (!targetRow) {
-                            const templateSourceRow = existingSources[0]; // 使用第一個找到的來源科目當作結構範本
-                            targetRow = { ...templateSourceRow, [keyColumn]: rule.target };
-                            numericCols.forEach(col => targetRow[col] = 0);
-                            aggregatedRows.push(targetRow);
-                            dataMap.set(rule.target, targetRow);
-                        }
+                            if (!targetRow) {
+                                const templateRow = existingSourceRows[0];
+                                targetRow = { ...templateRow, [keyColumn]: rule.target };
+                                numericCols.forEach(col => targetRow[col] = 0);
+                                aggregatedRows.push(targetRow);
+                                dataMap.set(rule.target, targetRow);
+                            }
 
-                        // 將所有存在的來源科目金額，累加到目標科目上
-                        existingSources.forEach(sourceRow => {
-                            numericCols.forEach(col => {
-                                targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                            existingSourceRows.forEach(sourceRow => {
+                                numericCols.forEach(col => {
+                                    targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                                });
+                                rowsToRemove.add(sourceRow[keyColumn]);
                             });
-                            rowsToRemove.add(sourceRow[keyColumn]);
-                        });
+                        }
                     });
 
-                    // 處理完所有規則後，一次性移除所有來源科目
                     if (rowsToRemove.size > 0) {
                         aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
                     }
