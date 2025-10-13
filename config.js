@@ -15,9 +15,9 @@ export const CONFIG_GOVERNMENTAL = {
 
 export const CONFIG_BUSINESS = {
     '損益表': { parser: 'fixed_business_profitloss_stateful', sheetKeyword: '損益', keyColumn: '科目', columns: ['科目', '上年度決算數', '本年度預算數', '原列決算數', '修正數', '決算核定數'] },
-    // ★★★ 更新盈虧撥補表的解析器名稱 ★★★
     '盈虧撥補表': { parser: 'fixed_business_appropriation_stateful', sheetKeyword: '盈虧', keyColumn: '項目', columns: ['項目', '上年度決算數', '本年度預算數', '原列決算數', '修正數', '決算核定數'] },
-    '現金流量表': { parser: 'fixed_business_cashflow', sheetKeyword: '現流', keyColumn: '項目', columns: ['項目', '本年度預算數', '原列決算數', '修正數', '決算核定數'] },
+    // ★★★ 核心修改：將現金流量表改用與作業基金相同的動態解析器 ★★★
+    '現金流量表': { parser: 'dynamic_normal', sheetKeyword: '現流', keyColumn: '項目', columns: ['項目', '本年度預算數', '原列決算數', '修正數', '決算核定數'] },
     '資產負債表': { parser: 'fixed_business_balancesheet_sidebyside', sheetKeyword: '資負', keyColumn: '科目', columns: ['科目', '上年度決算數', '原列決算數', '修正數', '決算核定數'] }
 };
 
@@ -42,7 +42,6 @@ export const PROFIT_LOSS_ACCOUNT_ORDER = [
     '本期淨利（淨損）歸屬於：', '母公司業主', '非控制權益'
 ];
 
-// ★★★ 更新盈虧撥補表的排序藍圖，使用唯一的科目名稱 ★★★
 export const APPROPRIATION_ACCOUNT_ORDER = [
     '盈餘之部', '本期淨利', '累積盈餘', '追溯適用及追溯重編之影響數', '公積轉列數', '出售庫藏股票損失', '其他綜合損益轉入數 (盈餘之部)',
     '分配之部', '中央政府所得者', '股（官）息紅利', '地方政府所得者', '股（官）息紅利', '轉投資機關所得者', '股（官）息紅利', '其他政府機關所得者', '股（官）息紅利', '民股股東所得者', '股息紅利', '其他所得者', '提撥地方政府', '其他依法分配數',
@@ -52,7 +51,6 @@ export const APPROPRIATION_ACCOUNT_ORDER = [
     '事業機關負擔者', '撥用盈餘', '撥用法定公積', '撥用特別公積', '撥用資本公積', '待填補之虧損'
 ];
 
-// ★★★ 新增現金流量表的排序藍圖 ★★★
 export const CASH_FLOW_ACCOUNT_ORDER = [
     // --- 營業活動 ---
     '營業活動之現金流量',
