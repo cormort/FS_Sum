@@ -256,7 +256,104 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
 
 function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
-    return _parseFixed(data, config, fundName, sheet, 5, colMap);
+    
+    // 營業基金現金流量表的資料通常從第 5 行開始
+    const startRow = 5; 
+
+    const records = [];
+    const keyColIndex = colMap[config.keyColumn];
+    const keyColumn = config.keyColumn;
+    const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
+    
+    // ★★★ 新增狀態追蹤變數 ★★★
+    let currentActivity = ''; // 追蹤目前的現金流量活動類型
+
+    for (let i = startRow; i < data.length; i++) {
+        const row = data[i];
+        if (!Array.isArray(row) || row.length === 0) continue;
+        
+        const keyText = String(row[keyColIndex] || '').trim();
+        const normalizedKey = normalize(keyText);
+        
+        // ★★★ 步驟 3: 檢查是否到達備註區，若到達則停止解析 ★★★
+        if (normalizedKey.includes('期末現金及約當現金')) {
+             // 匯入這一行
+            const record = { '基金名稱': fundName, [keyColumn]: keyText };
+            let hasMeaningfulData = false;
+            let indentLevel = 0;
+            try {
+                const cellAddress = XLSX.utils.encode_cell({ r: i, c: keyColIndex });
+                if (sheet[cellAddress]?.s?.alignment?.indent) indentLevel = sheet[cellAddress].s.alignment.indent;
+            } catch(e) {}
+            record.indent_level = indentLevel;
+
+            config.columns.forEach(colName => {
+                 const colIndex = colMap[colName];
+                 if (colIndex !== undefined) {
+                    const value = row[colIndex];
+                    record[colName] = value;
+                    if (colName !== config.keyColumn && value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
+                        hasMeaningfulData = true;
+                    }
+                 } else {
+                    record[colName] = '';
+                 }
+            });
+            if (hasMeaningfulData || keyText) {
+                records.push(record);
+            }
+            // 然後停止，忽略之後的備註
+            break; 
+        }
+
+        if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
+
+
+        // ★★★ 步驟 1: 更新活動分類狀態 ★★★
+        if (normalizedKey.includes('營業活動之現金流量')) {
+            currentActivity = ' (營業活動)';
+        } else if (normalizedKey.includes('投資活動之現金流量')) {
+            currentActivity = ' (投資活動)';
+        } else if (normalizedKey.includes('籌資活動之現金流量')) {
+            currentActivity = ' (籌資活動)';
+        }
+        
+        let finalKeyText = keyText;
+        
+        // ★★★ 步驟 2: 針對重複科目添加標記 ★★★
+        // 僅對標準名稱（不帶括號）進行標記，以防止重複標記或標記到調整項
+        if (['收取利息', '收取股利', '支付利息'].includes(normalizedKey)) {
+            if (currentActivity && !keyText.includes('(營業活動)') && !keyText.includes('(投資活動)') && !keyText.includes('(籌資活動)')) {
+                finalKeyText += currentActivity;
+            }
+        }
+        
+        const record = { '基金名稱': fundName, [keyColumn]: finalKeyText };
+        let hasMeaningfulData = false;
+        let indentLevel = 0;
+        try {
+            const cellAddress = XLSX.utils.encode_cell({ r: i, c: keyColIndex });
+            if (sheet[cellAddress]?.s?.alignment?.indent) indentLevel = sheet[cellAddress].s.alignment.indent;
+        } catch(e) {}
+        record.indent_level = indentLevel;
+
+        config.columns.forEach(colName => {
+             const colIndex = colMap[colName];
+             if (colIndex !== undefined) {
+                const value = row[colIndex];
+                record[colName] = value;
+                if (colName !== config.keyColumn && value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
+                    hasMeaningfulData = true;
+                }
+             } else {
+                record[colName] = '';
+             }
+        });
+        if (hasMeaningfulData || finalKeyText) {
+            records.push(record);
+        }
+    }
+    return records;
 }
 
 function parseBusinessBalanceSheet_SideBySide(data, config, fundName, sheet) {
