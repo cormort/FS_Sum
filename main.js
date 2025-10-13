@@ -1,8 +1,6 @@
 // main.js
 
-console.log("main.js script started executing."); // DEBUG: Check if script starts
-
-import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CASH_FLOW_ACCOUNT_ORDER } from './config.js';
+import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
@@ -136,7 +134,6 @@ function displayIndividualFund() {
 
 function displayAggregated() {
     const summaryData = {};
-    const normalizeKey = (key) => String(key || '').replace(/\s|　/g, '');
 
     for (const reportKey in allExtractedData) {
         if (!allExtractedData[reportKey]) continue;
@@ -147,86 +144,67 @@ function displayAggregated() {
 
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
-        
-        const aggregatedMap = new Map();
-        allExtractedData[reportKey].forEach(row => {
+
+        const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
-            if (!originalKeyText) return;
+            if (!originalKeyText) return acc;
+            const key = originalKeyText; 
 
-            const key = normalizeKey(originalKeyText);
-            if (!key) return;
-
-            let aggregatedRow = aggregatedMap.get(key);
-
-            if (!aggregatedRow) {
-                aggregatedRow = {
-                    [keyColumn]: String(originalKeyText).trim(), 
-                    'indent_level': row.indent_level || 0
-                };
-                numericCols.forEach(col => aggregatedRow[col] = 0);
-                aggregatedMap.set(key, aggregatedRow);
+            if (!acc[key]) {
+                acc[key] = { ...row };
+                numericCols.forEach(col => acc[key][col] = 0);
             }
-
             numericCols.forEach(col => {
-                const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
+                let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
                 if (!isNaN(val)) {
-                    aggregatedRow[col] += (selectedFundType === 'business' ? Math.round(val) : val);
+                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
                 }
             });
-        });
+            return acc;
+        }, {});
 
-        let aggregatedRows = Array.from(aggregatedMap.values());
+        let aggregatedRows = Object.values(grouped);
 
         if (selectedFundType === 'business') {
-             const getSortFunction = (orderArray) => (a, b) => {
-                const indexA = orderArray.indexOf(normalizeKey(a[keyColumn]));
-                const indexB = orderArray.indexOf(normalizeKey(b[keyColumn]));
-                if (indexA === -1) return 1;
-                if (indexB === -1) return -1;
-                return indexA - indexB;
-            };
-
             if (reportKey === '損益表') {
-                const dataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
-                const targetProfitName = normalizeKey('採用權益法認列之關聯企業及合資利益之份額');
-                const cbankProfitName = normalizeKey('事業投資利益');
-                const targetLossName = normalizeKey('採用權益法認列之關聯企業及合資損失之份額');
-                const cbankLossName = normalizeKey('事業投資損失');
-
+                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
+                const cbankProfitName = '事業投資利益';
+                const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
+                const cbankLossName = '事業投資損失';
+                let targetProfitRow = dataMap.get(targetProfitName);
                 const cbankProfitRow = dataMap.get(cbankProfitName);
+                let targetLossRow = dataMap.get(targetLossName);
+                const cbankLossRow = dataMap.get(cbankLossName);
+
                 if (cbankProfitRow) {
-                    let targetProfitRow = dataMap.get(targetProfitName);
                     if (!targetProfitRow) {
-                        targetProfitRow = { [keyColumn]: '採用權益法認列之關聯企業及合資利益之份額', indent_level: cbankProfitRow.indent_level };
+                        targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
                         numericCols.forEach(col => targetProfitRow[col] = 0);
                         aggregatedRows.push(targetProfitRow);
-                        dataMap.set(targetProfitName, targetProfitRow);
                     }
                     numericCols.forEach(col => {
                         targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
                     });
-                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== cbankProfitName);
-                }
-                
-                const cbankLossRow = dataMap.get(cbankLossName);
-                if (cbankLossRow) {
-                    let targetLossRow = dataMap.get(targetLossName);
-                    if (!targetLossRow) {
-                        targetLossRow = { [keyColumn]: '採用權益法認列之關聯企業及合資損失之份額', indent_level: cbankLossRow.indent_level };
-                        numericCols.forEach(col => targetLossRow[col] = 0);
-                        aggregatedRows.push(targetLossRow);
-                        dataMap.set(targetLossName, targetLossRow);
-                    }
-                     numericCols.forEach(col => {
-                        targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
-                    });
-                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== cbankLossName);
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
                 }
 
-                const finalDataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
-                const netIncomeRow = finalDataMap.get(normalizeKey('本期淨利（淨損）'));
-                const nonControllingInterestRow = finalDataMap.get(normalizeKey('非控制權益'));
-                const parentOwnerRow = finalDataMap.get(normalizeKey('母公司業主'));
+                if (cbankLossRow) {
+                    if (!targetLossRow) {
+                        targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
+                        numericCols.forEach(col => targetLossRow[col] = 0);
+                        aggregatedRows.push(targetLossRow);
+                    }
+                    numericCols.forEach(col => {
+                        targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
+                    });
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
+                }
+
+                const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
+                const nonControllingInterestRow = finalDataMap.get('非控制權益');
+                const parentOwnerRow = finalDataMap.get('母公司業主');
 
                 if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
                     numericCols.forEach(col => {
@@ -236,34 +214,43 @@ function displayAggregated() {
                     });
                 }
                 
-                aggregatedRows.sort(getSortFunction(PROFIT_LOSS_ACCOUNT_ORDER));
+                aggregatedRows.sort((a, b) => {
+                    const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
+                    const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
+                    if (indexA === -1) return 1;
+                    if (indexB === -1) return -1;
+                    return indexA - indexB;
+                });
             } 
             else if (reportKey === '盈虧撥補表') {
-                aggregatedRows.sort(getSortFunction(APPROPRIATION_ACCOUNT_ORDER));
-            }
-            else if (reportKey === '現金流量表') {
-                aggregatedRows.sort(getSortFunction(CASH_FLOW_ACCOUNT_ORDER));
+                aggregatedRows.sort((a, b) => {
+                    const indexA = APPROPRIATION_ACCOUNT_ORDER.indexOf(a[keyColumn]);
+                    const indexB = APPROPRIATION_ACCOUNT_ORDER.indexOf(b[keyColumn]);
+                    if (indexA === -1) return 1;
+                    if (indexB === -1) return -1;
+                    return indexA - indexB;
+                });
             }
             else if (reportKey === '資產負債表_資產') {
-                const dataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
-                const targetRow = dataMap.get(normalizeKey('存放銀行同業'));
-                const sourceRow = dataMap.get(normalizeKey('存放銀行業'));
+                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const targetRow = dataMap.get('存放銀行同業');
+                const sourceRow = dataMap.get('存放銀行業');
                 if (targetRow && sourceRow) {
                     numericCols.forEach(col => {
                         targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
                     });
-                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== normalizeKey('存放銀行業'));
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '存放銀行業');
                 }
             } 
             else if (reportKey === '資產負債表_負債及權益') {
-                const dataMap = new Map(aggregatedRows.map(row => [normalizeKey(row[keyColumn]), row]));
-                const targetRow = dataMap.get(normalizeKey('銀行同業存款'));
-                const sourceRow = dataMap.get(normalizeKey('銀行業存款'));
+                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
+                const targetRow = dataMap.get('銀行同業存款');
+                const sourceRow = dataMap.get('銀行業存款');
                 if (targetRow && sourceRow) {
                     numericCols.forEach(col => {
                         targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
                     });
-                    aggregatedRows = aggregatedRows.filter(row => normalizeKey(row[keyColumn]) !== normalizeKey('銀行業存款'));
+                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '銀行業存款');
                 }
             }
         }
@@ -413,19 +400,9 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目'];
-
     table += headers.map(h => {
-        const isNumericField = !['基金名稱', ...keyColumns].includes(h);
-        const isSortable = mode === 'comparison' && isNumericField;
-        let thClasses = [];
-        if (isSortable) {
-            thClasses.push('sortable');
-        }
-        if (isNumericField) {
-            thClasses.push('numeric');
-        }
-        const classAttr = thClasses.length > 0 ? ` class="${thClasses.join(' ')}"` : '';
-        return `<th${classAttr} data-column-key="${h}">${h} <span class="sort-arrow"></span></th>`;
+        const isSortable = mode === 'comparison' && !['基金名稱', ...keyColumns].includes(h);
+        return `<th class="${isSortable ? 'sortable' : ''}" data-column-key="${h}">${h} <span class="sort-arrow"></span></th>`;
     }).join('');
     table += '</tr></thead><tbody>';
 
@@ -437,21 +414,14 @@ function createTableHtml(records, headers, mode = 'default') {
             const isKeyColumn = keyColumns.includes(header);
             const indentLevel = record.indent_level || record.indent || 0;
             let style = '';
-            let tdClass = '';
-
             if (isKeyColumn && indentLevel > 0) {
                 style = `padding-left: ${1 + indentLevel * 1.5}em;`;
             }
             const isNumericField = !['基金名稱', ...keyColumns].includes(header);
-            if (isNumericField) {
-                tdClass = 'numeric';
-                if (val != null && val !== '' && !isNaN(Number(String(val).replace(/,/g, '')))) {
-                     displayVal = Number(String(val).replace(/,/g, '')).toLocaleString();
-                }
+            if (isNumericField && val != null && val !== '' && !isNaN(Number(String(val).replace(/,/g, '')))) {
+                 displayVal = Number(String(val).replace(/,/g, '')).toLocaleString();
             }
-            const classAttr = tdClass ? ` class="${tdClass}"` : '';
-            const styleAttr = style ? ` style="${style}"` : '';
-            table += `<td${classAttr}${styleAttr}>${displayVal}</td>`;
+            table += `<td style="${style}">${displayVal}</td>`;
         });
         table += '</tr>';
     });
@@ -543,38 +513,35 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         <thead>
             <tr>
                 <th rowspan="2">基金別</th>
-                <th colspan="3" style="text-align: center;">預算數</th>
-                <th colspan="3" style="text-align: center;">決算核定數</th>
-                <th colspan="3" style="text-align: center;">決算核定數與預算數比較</th>
-                <th rowspan="2" class="numeric">期初基金餘額</th>
-                <th rowspan="2" class="numeric">本期繳庫數</th>
-                <th rowspan="2" class="numeric">期末基金餘額</th>
+                <th colspan="3">預算數</th>
+                <th colspan="3">決算核定數</th>
+                <th colspan="3">決算核定數與預算數比較</th>
+                <th rowspan="2">期初基金餘額</th>
+                <th rowspan="2">本期繳庫數</th>
+                <th rowspan="2">期末基金餘額</th>
             </tr>
             <tr>
-                <th class="numeric">基金來源</th><th class="numeric">基金用途</th><th class="numeric">賸餘(短絀)</th>
-                <th class="numeric">基金來源</th><th class="numeric">基金用途</th><th class="numeric">賸餘(短絀)</th>
-                <th class="numeric">基金來源</th><th class="numeric">基金用途</th><th class="numeric">賸餘(短絀)</th>
+                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
+                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
+                <th>基金來源</th><th>基金用途</th><th>賸餘(短絀)</th>
             </tr>
         </thead>
         <tbody>
             <tr>
                 <td>所有基金合計</td>
-                <td class="numeric">${findValue('基金來源', '預算數')}</td>
-                <td class="numeric">${findValue('基金用途', '預算數')}</td>
-                <td class="numeric">${findValue('本期賸餘(短絀)', '預算數')}</td>
-                <td class="numeric">${findValue('基金來源', '決算核定數')}</td>
-                <td class="numeric">${findValue('基金用途', '決算核定數')}</td>
-                <td class="numeric">${findValue('本期賸餘(短絀)', '決算核定數')}</td>
-                <td class="numeric">${findValue('基金來源', '預算與決算核定數比較增減')}</td>
-                <td class="numeric">${findValue('基金用途', '預算與決算核定數比較增減')}</td>
-                <td class="numeric">${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
-                <td class="numeric">${findValue('期初基金餘額', '決算核定數')}</td>
-                <td class="numeric">${findValue('本期繳庫數', '決算核定數')}</td>
-                <td class="numeric">${findValue('期末基金餘額', '決算核定數')}</td>
+                <td>${findValue('基金來源', '預算數')}</td>
+                <td>${findValue('基金用途', '預算數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算數')}</td>
+                <td>${findValue('基金來源', '決算核定數')}</td>
+                <td>${findValue('基金用途', '決算核定數')}</td>
+                <td>${findValue('本期賸餘(短絀)', '決算核定數')}</td>
+                <td>${findValue('基金來源', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('基金用途', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
+                <td>${findValue('期初基金餘額', '決算核定數')}</td>
+                <td>${findValue('本期繳庫數', '決算核定數')}</td>
+                <td>${findValue('期末基金餘額', '決算核定數')}</td>
             </tr>
         </tbody></table>`;
     return table;
 }
-
-console.log("main.js script parsed successfully."); // DEBUG: Check if script parses```
---- END OF FILE main.js ---
