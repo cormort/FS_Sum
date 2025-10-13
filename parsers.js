@@ -257,26 +257,28 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     return records;
 }
 
+// ★★★ 核心修正函式 ★★★
 function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
-    
     const startRow = 5; 
-
     const records = [];
     const keyColIndex = colMap[config.keyColumn];
     const keyColumn = config.keyColumn;
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
     
-    let currentActivity = ''; // 追蹤目前的現金流量活動類型
+    // 狀態變數，用來追蹤目前在哪個活動區塊
+    let currentActivity = ''; 
 
     for (let i = startRow; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
         
-        const keyText = String(row[keyColIndex] || '').trim();
+        let keyText = String(row[keyColIndex] || '').trim();
         const normalizedKey = normalize(keyText);
         
+        // 解析到報表末尾的結束標記時，就停止處理
         if (normalizedKey.includes('期末現金及約當現金')) {
+            // 匯入最後一行並結束
             const record = { '基金名稱': fundName, [keyColumn]: keyText };
             let hasMeaningfulData = false;
             let indentLevel = 0;
@@ -285,7 +287,6 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
                 if (sheet[cellAddress]?.s?.alignment?.indent) indentLevel = sheet[cellAddress].s.alignment.indent;
             } catch(e) {}
             record.indent_level = indentLevel;
-
             config.columns.forEach(colName => {
                 const colIndex = colMap[colName];
                 if (colIndex !== undefined) {
@@ -306,6 +307,7 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
 
         if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
 
+        // 步驟 1: 偵測到區塊標題時，更新狀態
         if (normalizedKey.includes('營業活動之現金流量')) {
             currentActivity = ' (營業活動)';
         } else if (normalizedKey.includes('投資活動之現金流量')) {
@@ -316,12 +318,15 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
         
         let finalKeyText = keyText;
         
+        // 步驟 2: 如果是目標科目，且處於某個活動區塊中，就加上後綴
         if (['收取利息', '收取股利', '支付利息'].includes(normalizedKey)) {
+            // 確保有活動狀態，並且原始科目不包含後綴（避免重複添加）
             if (currentActivity && !keyText.includes('(營業活動)') && !keyText.includes('(投資活動)') && !keyText.includes('(籌資活動)')) {
                 finalKeyText += currentActivity;
             }
         }
         
+        // 建立資料紀錄
         const record = { '基金名稱': fundName, [keyColumn]: finalKeyText };
         let hasMeaningfulData = false;
         let indentLevel = 0;
