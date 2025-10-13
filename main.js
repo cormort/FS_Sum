@@ -167,7 +167,6 @@ function displayAggregated() {
 
         if (selectedFundType === 'business') {
             if (reportKey === '損益表') {
-                // Profit & Loss statement logic remains the same
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
                 const cbankProfitName = '事業投資利益';
@@ -232,23 +231,25 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產負債表科目合併 (強化版) ★★★
+            // ★★★ 核心修正：資產負債表科目合併 (最完整規則版) ★★★
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
                 
-                // Define all merge rules in one place
                 const mergeRules = {
                     '資產負債表_資產': [
-                        { target: '存放銀行同業', source: '存放銀行業' },
-                        { target: '押匯貼現及放款', source: '融通' },
-                        { target: '採用權益法之投資', source: '事業投資' }
+                        { target: '存放銀行同業', sources: ['存放銀行業', '存放央行'] },
+                        { 
+                            target: '押匯貼現及放款', 
+                            sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] 
+                        },
+                        { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'] }
                     ],
                     '資產負債表_負債及權益': [
-                        { target: '銀行同業存款', source: '銀行業存款' },
-                        { target: '存款、匯款及金融債券', source: '存款' },
-                        { target: '支票存款', source: '公庫及政府機關存款' },
-                        { target: '儲蓄存款', source: '儲蓄存款及儲蓄券' }
+                        { target: '銀行同業存款', sources: ['銀行業存款'] },
+                        { target: '存款、匯款及金融債券', sources: ['存款'] },
+                        { target: '支票存款', sources: ['公庫及政府機關存款'] },
+                        { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
                     ]
                 };
 
@@ -256,34 +257,31 @@ function displayAggregated() {
 
                 if (activeMergeRules) {
                     activeMergeRules.forEach(rule => {
-                        const sourceRow = dataMap.get(rule.source);
-                        // If the source row doesn't exist, there's nothing to merge.
-                        if (!sourceRow) return;
-
                         let targetRow = dataMap.get(rule.target);
+                        
+                        // 檢查所有來源科目，看是否有任何一個存在
+                        const existingSources = rule.sources.map(s => dataMap.get(s)).filter(Boolean);
+                        if (existingSources.length === 0) return; // 沒有任何來源科目，無需合併
 
-                        // If the target row doesn't exist, CREATE IT. This is the crucial fix.
+                        // 如果目標科目不存在，但有來源科目存在，就主動建立目標科目
                         if (!targetRow) {
-                            // Create a new row, using the source row as a template for structure
-                            // but setting the key to the target name and resetting numeric values.
-                            targetRow = { ...sourceRow, [keyColumn]: rule.target };
+                            const templateSourceRow = existingSources[0]; // 使用第一個找到的來源科目當作結構範本
+                            targetRow = { ...templateSourceRow, [keyColumn]: rule.target };
                             numericCols.forEach(col => targetRow[col] = 0);
-                            
-                            // Add the newly created target row to our data structures
                             aggregatedRows.push(targetRow);
                             dataMap.set(rule.target, targetRow);
                         }
 
-                        // Now, safely perform the merge.
-                        numericCols.forEach(col => {
-                            targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                        // 將所有存在的來源科目金額，累加到目標科目上
+                        existingSources.forEach(sourceRow => {
+                            numericCols.forEach(col => {
+                                targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                            });
+                            rowsToRemove.add(sourceRow[keyColumn]);
                         });
-                        
-                        // Mark the source row for removal.
-                        rowsToRemove.add(rule.source);
                     });
 
-                    // After processing all rules, filter out the source rows.
+                    // 處理完所有規則後，一次性移除所有來源科目
                     if (rowsToRemove.size > 0) {
                         aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
                     }
