@@ -81,7 +81,6 @@ function handleFiles(files) {
 
 // --- UI and State Management Functions ---
 function resetState(fullReset = true) {
-    // This function remains the same
     allExtractedData = {};
     fundNames = [];
     fundFileMap = {};
@@ -100,13 +99,11 @@ function resetState(fullReset = true) {
 }
 
 function renderControls() {
-    // This function remains the same
     controlsContainer.innerHTML = `<div class="control-row"><div class="control-group"><label>檢視模式：</label><div class="mode-selector"><input type="radio" id="mode-individual" name="view-mode" value="individual" checked><label for="mode-individual">個別基金</label><input type="radio" id="mode-sum" name="view-mode" value="sum"><label for="mode-sum">所有基金加總</label><input type="radio" id="mode-compare" name="view-mode" value="compare"><label for="mode-compare">單項比較</label></div></div></div><div class="control-row" id="dynamic-controls"></div>`;
     controlsContainer.querySelector('.mode-selector').addEventListener('change', refreshView);
 }
 
 function refreshView() {
-    // This function remains the same
     const selectedMode = document.querySelector('input[name="view-mode"]:checked').value;
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     dynamicControlsContainer.innerHTML = '';
@@ -122,7 +119,6 @@ function refreshView() {
 }
 
 function displayIndividualFund() {
-    // This function remains the same
     const selectedFund = document.getElementById('fund-select')?.value;
     if (!selectedFund) return;
     const fundData = {};
@@ -137,19 +133,23 @@ function displayIndividualFund() {
 }
 
 function displayAggregated() {
-    // This function remains the same (no cash flow specific logic)
     const summaryData = {};
+
     for (const reportKey in allExtractedData) {
         if (!allExtractedData[reportKey]) continue;
+
         const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
         const config = FULL_CONFIG[selectedFundType][baseKey];
         if (!config) continue;
+
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
+
         const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
             if (!originalKeyText) return acc;
             const key = originalKeyText; 
+
             if (!acc[key]) {
                 acc[key] = { ...row };
                 numericCols.forEach(col => acc[key][col] = 0);
@@ -162,7 +162,9 @@ function displayAggregated() {
             });
             return acc;
         }, {});
+
         let aggregatedRows = Object.values(grouped);
+
         if (selectedFundType === 'business') {
             if (reportKey === '損益表') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
@@ -174,6 +176,7 @@ function displayAggregated() {
                 const cbankProfitRow = dataMap.get(cbankProfitName);
                 let targetLossRow = dataMap.get(targetLossName);
                 const cbankLossRow = dataMap.get(cbankLossName);
+
                 if (cbankProfitRow) {
                     if (!targetProfitRow) {
                         targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
@@ -185,6 +188,7 @@ function displayAggregated() {
                     });
                     aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
                 }
+
                 if (cbankLossRow) {
                     if (!targetLossRow) {
                         targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
@@ -196,10 +200,12 @@ function displayAggregated() {
                     });
                     aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
                 }
+
                 const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
                 const nonControllingInterestRow = finalDataMap.get('非控制權益');
                 const parentOwnerRow = finalDataMap.get('母公司業主');
+
                 if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
                     numericCols.forEach(col => {
                         const netIncome = netIncomeRow[col] || 0;
@@ -207,6 +213,7 @@ function displayAggregated() {
                         parentOwnerRow[col] = netIncome - nonControllingInterest;
                     });
                 }
+                
                 aggregatedRows.sort((a, b) => {
                     const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
                     const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
@@ -224,29 +231,59 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
+            // ★★★ 核心修正：資產科目合併 ★★★
             else if (reportKey === '資產負債表_資產') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const targetRow = dataMap.get('存放銀行同業');
-                const sourceRow = dataMap.get('存放銀行業');
-                if (targetRow && sourceRow) {
-                    numericCols.forEach(col => {
-                        targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
-                    });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '存放銀行業');
+                const rowsToRemove = new Set();
+                const mergeRules = [
+                    { target: '存放銀行同業', source: '存放銀行業' },
+                    { target: '押匯貼現及放款', source: '融通' },
+                    { target: '採用權益法之投資', source: '事業投資' }
+                ];
+
+                mergeRules.forEach(rule => {
+                    const targetRow = dataMap.get(rule.target);
+                    const sourceRow = dataMap.get(rule.source);
+                    if (targetRow && sourceRow) {
+                        numericCols.forEach(col => {
+                            targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                        });
+                        rowsToRemove.add(rule.source);
+                    }
+                });
+
+                if (rowsToRemove.size > 0) {
+                    aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
                 }
             } 
+            // ★★★ 核心修正：負債科目合併 ★★★
             else if (reportKey === '資產負債表_負債及權益') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const targetRow = dataMap.get('銀行同業存款');
-                const sourceRow = dataMap.get('銀行業存款');
-                if (targetRow && sourceRow) {
-                    numericCols.forEach(col => {
-                        targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
-                    });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== '銀行業存款');
+                const rowsToRemove = new Set();
+                const mergeRules = [
+                    { target: '銀行同業存款', source: '銀行業存款' },
+                    { target: '存款、匯款及金融債券', source: '存款' },
+                    { target: '支票存款', source: '公庫及政府機關存款' },
+                    { target: '儲蓄存款', source: '儲蓄存款及儲蓄券' }
+                ];
+
+                mergeRules.forEach(rule => {
+                    const targetRow = dataMap.get(rule.target);
+                    const sourceRow = dataMap.get(rule.source);
+                    if (targetRow && sourceRow) {
+                        numericCols.forEach(col => {
+                            targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                        });
+                        rowsToRemove.add(rule.source);
+                    }
+                });
+                
+                if (rowsToRemove.size > 0) {
+                    aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
                 }
             }
         }
+
         summaryData[reportKey] = aggregatedRows;
     }
     outputContainer.innerHTML = createTabsAndTables(summaryData, {}, 'sum');
@@ -255,25 +292,29 @@ function displayAggregated() {
 }
 
 function displayComparison() {
-    // This function remains the same
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
     const activeConfig = FULL_CONFIG[selectedFundType];
     const reportKeysInData = Object.keys(allExtractedData).sort();
+
     reportKeysInData.forEach(reportKey => {
         if (!allExtractedData[reportKey] || allExtractedData[reportKey].length === 0) return;
         const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
         const config = activeConfig[baseKey];
         if (!config || !config.keyColumn) return;
+
         const keyColumn = config.keyColumn;
         const items = [...new Set(allExtractedData[reportKey].map(r => r[keyColumn]))].filter(Boolean).sort((a,b) => a.localeCompare(b, 'zh-Hant'));
         const tabName = reportKey.replace(/_/g, ' ');
+
         if (items.length > 0) {
             optionsHtml += `<optgroup label="${tabName}">${items.map(item => `<option value="${reportKey}::${item}">${item}</option>`).join('')}</optgroup>`;
         }
     });
+
     dynamicControlsContainer.innerHTML = `<div class="control-group"><label for="item-select">選擇比較項目：</label><select id="item-select">${optionsHtml}</select></div>`;
     const itemSelect = document.getElementById('item-select');
+    
     const updateComparisonView = () => {
         const selectedItem = itemSelect?.value;
         if (!selectedItem) {
@@ -287,9 +328,11 @@ function displayComparison() {
         const columns = config.columns;
         const dataForCompare = allExtractedData[reportKey].filter(r => r[keyColumn] === itemName);
         const finalData = { [reportKey]: [] };
+        
         const totals = {};
         const numericHeaders = columns.filter(c => c !== keyColumn);
         numericHeaders.forEach(h => totals[h] = 0);
+
         fundNames.forEach(fund => {
             const fundRow = dataForCompare.find(r => r['基金名稱'] === fund);
             const newRow = { '基金名稱': fund };
@@ -305,15 +348,18 @@ function displayComparison() {
             });
             finalData[reportKey].push(newRow);
         });
+
         const totalRow = { '基金名稱': `${itemName}合計` };
         Object.assign(totalRow, totals);
         finalData[reportKey].unshift(totalRow);
+
         const headers = ['基金名稱', ...columns.filter(c => c !== keyColumn)];
         outputContainer.innerHTML = createTabsAndTables(finalData, { [reportKey]: headers }, 'comparison');
         initTabs();
         initSortableTables();
         initExportButtons();
     };
+
     itemSelect.addEventListener('change', updateComparisonView);
     if (itemSelect.options.length > 0) {
         updateComparisonView();
@@ -321,12 +367,12 @@ function displayComparison() {
 }
 
 function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
-    // This function remains the same
     let tabsHtml = '<div class="report-tabs">';
     let contentHtml = '';
     let isFirst = true;
     const activeConfig = FULL_CONFIG[selectedFundType];
     const reportKeysInOrder = Object.keys(activeConfig);
+
     const allPossibleKeys = [];
     reportKeysInOrder.forEach(k => {
         if (k === '平衡表' || k === '資產負債表') {
@@ -335,28 +381,34 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
             allPossibleKeys.push(k);
         }
     });
+
     const dataKeys = Object.keys(data);
     const orderedDataKeys = allPossibleKeys.filter(k => dataKeys.includes(k));
+
     orderedDataKeys.forEach(reportKey => {
         if (data[reportKey] && data[reportKey].length > 0) {
             const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
             const config = activeConfig[baseKey];
             if (!config) return;
+
             const columns = config.columns;
             const tabName = reportKey.replace(/_/g, ' ');
             tabsHtml += `<button class="tab-link ${isFirst ? 'active' : ''}" data-tab="${reportKey}">${tabName}</button>`;
+            
             let tableContent;
             if (selectedFundType === 'governmental' && reportKey === '餘絀表' && mode === 'sum') {
                 tableContent = createGovernmentalYuchuSummaryTable(data[reportKey]);
             } else {
                 tableContent = createTableHtml(data[reportKey], customHeaders[reportKey] || ['基金名稱', ...columns], mode);
             }
+
             const exportButtons = `
                 <div class="export-buttons">
                     <button class="export-btn json" data-format="json" data-report-key="${reportKey}">匯出 JSON</button>
                     <button class="export-btn xlsx" data-format="xlsx" data-report-key="${reportKey}">匯出 XLSX</button>
                     <button class="export-btn" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
                 </div>`;
+
             contentHtml += `<div id="${reportKey}" class="tab-content ${isFirst ? 'active' : ''}">
                 <div class="tab-header">
                     <h2>${tabName}</h2>
@@ -374,7 +426,6 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     return tabsHtml + contentHtml;
 }
 
-// ★★★ 核心修正：處理負值紅字 ★★★
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目', '基金名稱']; 
@@ -406,7 +457,6 @@ function createTableHtml(records, headers, mode = 'default') {
                     const numVal = Number(rawVal);
                     displayVal = numVal.toLocaleString();
                     className = 'numeric-data';
-                    // 如果數值小於 0，添加 'negative-value' class
                     if (numVal < 0) {
                         className += ' negative-value';
                     }
@@ -425,7 +475,6 @@ function createTableHtml(records, headers, mode = 'default') {
 }
 
 function initTabs() {
-    // This function remains the same
     const tabs = document.querySelectorAll('.report-tabs .tab-link');
     const contents = document.querySelectorAll('.tab-content');
     tabs.forEach(tab => {
@@ -447,24 +496,28 @@ function initTabs() {
 }
 
 function initSortableTables() {
-    // This function remains the same
     document.querySelectorAll('.sortable').forEach(th => {
         th.addEventListener('click', () => {
             const table = th.closest('table');
             const tbody = table.querySelector('tbody');
             const headerIndex = Array.from(th.parentNode.children).indexOf(th);
             const currentIsDesc = th.classList.contains('sort-desc');
+
             table.querySelectorAll('th').forEach(h => {
                 h.classList.remove('sort-asc', 'sort-desc');
                 const arrow = h.querySelector('.sort-arrow');
                 if(arrow) arrow.textContent = '';
             });
+
             let direction = currentIsDesc ? 'asc' : 'desc';
             th.classList.add(direction === 'asc' ? 'sort-asc' : 'sort-desc');
+            
             const arrow = th.querySelector('.sort-arrow');
             if(arrow) arrow.textContent = direction === 'asc' ? '▲' : '▼';
+
             const rows = Array.from(tbody.querySelectorAll('tr'));
-            const headerRow = rows.shift();
+            const headerRow = rows.shift(); // Keep total row at top
+
             rows.sort((a, b) => {
                 const aValText = a.children[headerIndex].textContent;
                 const bValText = b.children[headerIndex].textContent;
@@ -479,7 +532,6 @@ function initSortableTables() {
 }
 
 function initExportButtons() {
-    // This function remains the same
     document.querySelectorAll('.export-btn').forEach(button => {
         button.addEventListener('click', (e) => {
             const reportKey = e.target.dataset.reportKey;
@@ -490,9 +542,9 @@ function initExportButtons() {
 }
 
 function createGovernmentalYuchuSummaryTable(aggregatedData) {
-    // This function remains the same
     const yuchuData = aggregatedData;
     if (!yuchuData || yuchuData.length === 0) return '<p>無餘絀表資料可顯示。</p>';
+
     const findValue = (itemName, colName) => {
         const cleanItemName = itemName.replace(/\s|　/g, '');
         const row = yuchuData.find(r => String(r['項目']).replace(/\s|　/g, '') === cleanItemName);
@@ -502,6 +554,7 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         }
         return '0';
     };
+
     let table = `<table>
         <thead>
             <tr>
