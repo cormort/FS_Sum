@@ -4,7 +4,7 @@ import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER } f
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
-// ★★★ 新增：內建公版資產負債表科目順序樣板 ★★★
+// ★★★ 內建公版資產負債表科目順序樣板 ★★★
 const PUBLIC_ASSET_ORDER = [
     "資產", "流動資產", "現金", "存放銀行同業", "存放央行", "流動金融資產", "應收款項", 
     "本期所得稅資產", "黃金與白銀", "存貨", "消耗性生物資產－流動", "生產性生物資產－流動", 
@@ -271,7 +271,7 @@ function displayAggregated() {
                 const rowsToRemove = new Set();
                 const mergeRules = {
                     '資產負債表_資產': [
-                        { target: '存放銀行同業', sources: ['存放銀行業', '存放央行'] },
+                        { target: '存放銀行同業', sources: ['存放銀行業'] }, // '存放央行' is now a separate item
                         { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] },
                         { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'] }
                     ],
@@ -282,6 +282,7 @@ function displayAggregated() {
                         { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
                     ]
                 };
+
                 const activeMergeRules = mergeRules[reportKey];
                 if (activeMergeRules) {
                     activeMergeRules.forEach(rule => {
@@ -305,7 +306,8 @@ function displayAggregated() {
                 }
                 rowsToRemove.forEach(key => dataMap.delete(key));
 
-                let finalRows = Array.from(dataMap.values());
+                let finalRows = [];
+                const processedKeys = new Set();
 
                 let standardOrder = [];
                 if (reportKey === '資產負債表_資產') {
@@ -315,20 +317,28 @@ function displayAggregated() {
                 }
                 
                 if (standardOrder.length > 0) {
-                    finalRows.sort((a, b) => {
-                        const keyA = a[keyColumn];
-                        const keyB = b[keyColumn];
-                        const indexA = standardOrder.indexOf(keyA);
-                        const indexB = standardOrder.indexOf(keyB);
-
-                        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-                        if (indexA !== -1) return -1;
-                        if (indexB !== -1) return 1;
-                        return String(keyA).localeCompare(String(keyB), 'zh-Hant');
+                    // ★★★ 核心修正：按樣板重建報表，確保結構完整 ★★★
+                    standardOrder.forEach(key => {
+                        if (dataMap.has(key)) {
+                            finalRows.push(dataMap.get(key));
+                        } else {
+                            const newEmptyRow = { [keyColumn]: key, indent_level: 0 };
+                            numericCols.forEach(col => newEmptyRow[col] = 0);
+                            finalRows.push(newEmptyRow);
+                        }
+                        processedKeys.add(key);
                     });
+
+                    dataMap.forEach((rowData, key) => {
+                        if (!processedKeys.has(key)) {
+                            finalRows.push(rowData);
+                        }
+                    });
+                    
+                    aggregatedRows = finalRows;
+                } else {
+                    aggregatedRows = Array.from(dataMap.values());
                 }
-                
-                aggregatedRows = finalRows;
             }
         }
 
