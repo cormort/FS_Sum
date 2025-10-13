@@ -167,6 +167,7 @@ function displayAggregated() {
 
         if (selectedFundType === 'business') {
             if (reportKey === '損益表') {
+                // Profit & Loss statement logic remains the same
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
                 const cbankProfitName = '事業投資利益';
@@ -231,55 +232,61 @@ function displayAggregated() {
                     return indexA - indexB;
                 });
             }
-            // ★★★ 核心修正：資產科目合併 ★★★
-            else if (reportKey === '資產負債表_資產') {
+            // ★★★ 核心修正：資產負債表科目合併 (強化版) ★★★
+            else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 const rowsToRemove = new Set();
-                const mergeRules = [
-                    { target: '存放銀行同業', source: '存放銀行業' },
-                    { target: '押匯貼現及放款', source: '融通' },
-                    { target: '採用權益法之投資', source: '事業投資' }
-                ];
-
-                mergeRules.forEach(rule => {
-                    const targetRow = dataMap.get(rule.target);
-                    const sourceRow = dataMap.get(rule.source);
-                    if (targetRow && sourceRow) {
-                        numericCols.forEach(col => {
-                            targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
-                        });
-                        rowsToRemove.add(rule.source);
-                    }
-                });
-
-                if (rowsToRemove.size > 0) {
-                    aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
-                }
-            } 
-            // ★★★ 核心修正：負債科目合併 ★★★
-            else if (reportKey === '資產負債表_負債及權益') {
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const rowsToRemove = new Set();
-                const mergeRules = [
-                    { target: '銀行同業存款', source: '銀行業存款' },
-                    { target: '存款、匯款及金融債券', source: '存款' },
-                    { target: '支票存款', source: '公庫及政府機關存款' },
-                    { target: '儲蓄存款', source: '儲蓄存款及儲蓄券' }
-                ];
-
-                mergeRules.forEach(rule => {
-                    const targetRow = dataMap.get(rule.target);
-                    const sourceRow = dataMap.get(rule.source);
-                    if (targetRow && sourceRow) {
-                        numericCols.forEach(col => {
-                            targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
-                        });
-                        rowsToRemove.add(rule.source);
-                    }
-                });
                 
-                if (rowsToRemove.size > 0) {
-                    aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
+                // Define all merge rules in one place
+                const mergeRules = {
+                    '資產負債表_資產': [
+                        { target: '存放銀行同業', source: '存放銀行業' },
+                        { target: '押匯貼現及放款', source: '融通' },
+                        { target: '採用權益法之投資', source: '事業投資' }
+                    ],
+                    '資產負債表_負債及權益': [
+                        { target: '銀行同業存款', source: '銀行業存款' },
+                        { target: '存款、匯款及金融債券', source: '存款' },
+                        { target: '支票存款', source: '公庫及政府機關存款' },
+                        { target: '儲蓄存款', source: '儲蓄存款及儲蓄券' }
+                    ]
+                };
+
+                const activeMergeRules = mergeRules[reportKey];
+
+                if (activeMergeRules) {
+                    activeMergeRules.forEach(rule => {
+                        const sourceRow = dataMap.get(rule.source);
+                        // If the source row doesn't exist, there's nothing to merge.
+                        if (!sourceRow) return;
+
+                        let targetRow = dataMap.get(rule.target);
+
+                        // If the target row doesn't exist, CREATE IT. This is the crucial fix.
+                        if (!targetRow) {
+                            // Create a new row, using the source row as a template for structure
+                            // but setting the key to the target name and resetting numeric values.
+                            targetRow = { ...sourceRow, [keyColumn]: rule.target };
+                            numericCols.forEach(col => targetRow[col] = 0);
+                            
+                            // Add the newly created target row to our data structures
+                            aggregatedRows.push(targetRow);
+                            dataMap.set(rule.target, targetRow);
+                        }
+
+                        // Now, safely perform the merge.
+                        numericCols.forEach(col => {
+                            targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                        });
+                        
+                        // Mark the source row for removal.
+                        rowsToRemove.add(rule.source);
+                    });
+
+                    // After processing all rules, filter out the source rows.
+                    if (rowsToRemove.size > 0) {
+                        aggregatedRows = aggregatedRows.filter(row => !rowsToRemove.has(row[keyColumn]));
+                    }
                 }
             }
         }
