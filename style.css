@@ -47,9 +47,9 @@ tbody tr:nth-child(even) { background-color: #f8f9fa; }
 tbody tr:hover { background-color: #ecf0f1; }
 tbody tr:first-child { background-color: #e8f8f5; font-weight: bold; }
 
-/* 新增樣式: 數值欄位靠右對齊 */
-.numeric-data { text-align: right; }
 
+.numeric-data { text-align: right; }/* 數值欄位靠右對齊 */
+.negative-value {color: red;}/* 負數值紅色顯示 */
 .sortable { cursor: pointer; position: relative; user-select: none; }
 .sortable:hover { background-color: #34495e; }
 .sort-arrow { display: inline-block; width: 1em; text-align: center; position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
