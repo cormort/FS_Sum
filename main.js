@@ -1,6 +1,6 @@
 // main.js
 
-import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER } from './config.js';
+import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CASH_FLOW_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
@@ -145,19 +145,21 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
+        // ★★★ 修改加總邏輯，使用正規化的 key 來避免空白字元造成的重複問題 ★★★
         const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
             if (!originalKeyText) return acc;
-            const key = originalKeyText; 
 
-            if (!acc[key]) {
-                acc[key] = { ...row };
-                numericCols.forEach(col => acc[key][col] = 0);
+            const normalizedKey = String(originalKeyText).replace(/\s|　/g, '');
+
+            if (!acc[normalizedKey]) {
+                acc[normalizedKey] = { ...row };
+                numericCols.forEach(col => acc[normalizedKey][col] = 0);
             }
             numericCols.forEach(col => {
                 let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
                 if (!isNaN(val)) {
-                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
+                    acc[normalizedKey][col] += (selectedFundType === 'business' ? Math.round(val) : val);
                 }
             });
             return acc;
@@ -226,6 +228,16 @@ function displayAggregated() {
                 aggregatedRows.sort((a, b) => {
                     const indexA = APPROPRIATION_ACCOUNT_ORDER.indexOf(a[keyColumn]);
                     const indexB = APPROPRIATION_ACCOUNT_ORDER.indexOf(b[keyColumn]);
+                    if (indexA === -1) return 1;
+                    if (indexB === -1) return -1;
+                    return indexA - indexB;
+                });
+            }
+            // ★★★ 新增現金流量表的排序邏輯 ★★★
+            else if (reportKey === '現金流量表') {
+                aggregatedRows.sort((a, b) => {
+                    const indexA = CASH_FLOW_ACCOUNT_ORDER.indexOf(a[keyColumn]);
+                    const indexB = CASH_FLOW_ACCOUNT_ORDER.indexOf(b[keyColumn]);
                     if (indexA === -1) return 1;
                     if (indexB === -1) return -1;
                     return indexA - indexB;
