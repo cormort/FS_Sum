@@ -14,12 +14,12 @@ function applyCashFlowSuffixesByOrder(records, keyColumn) {
     const itemCounter = {
         '收取利息': 0,
         '收取股利': 0,
-        '支付利息': 0
+        '支付利息': 0,
+        '發放現金股利': 0 // ★★★ 新增此項目 ★★★
     };
     const targetItems = Object.keys(itemCounter);
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
 
-    // Use .map to create a new array with the modified records
     return records.map(record => {
         const keyText = record[keyColumn] || '';
         const normalizedKey = normalize(keyText);
@@ -29,23 +29,23 @@ function applyCashFlowSuffixesByOrder(records, keyColumn) {
             const count = itemCounter[normalizedKey];
             let suffix = '';
 
-            // Apply suffix based on your specific rules
+            // ★★★ 核心邏輯修改 ★★★
             if (count === 1) {
+                // 第一次出現的所有目標項目都視為營業活動
                 suffix = ' (營業活動)';
             } else if (count === 2) {
-                if (normalizedKey === '支付利息') {
+                // 第二次出現時，根據不同項目應用不同後綴
+                if (normalizedKey === '支付利息' || normalizedKey === '發放現金股利') {
                     suffix = ' (籌資活動)';
-                } else { // For '收取利息' and '收取股利'
+                } else { // '收取利息' and '收取股利'
                     suffix = ' (投資活動)';
                 }
             }
 
             if (suffix) {
-                // Return a new object with the updated key to avoid modifying the original
                 return { ...record, [keyColumn]: keyText + suffix };
             }
         }
-        // If no modification is needed, return the original record
         return record;
     });
 }
@@ -187,7 +187,6 @@ function parseFixedShouzhiBiao(data, config, fundName, sheet) {
 
 // --- Business Fund Parsers ---
 function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
-    // This function remains the same
     const records = [];
     const colMap = { '科目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
     const keyColIndex = colMap[config.keyColumn];
@@ -236,7 +235,6 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
 }
 
 function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
-    // This function remains the same
     const records = [];
     const colMap = { '項目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
     const keyColIndex = colMap[config.keyColumn];
@@ -328,12 +326,8 @@ export function processFile(file, selectedFundType) {
                 const parserFunc = PARSERS[config.parser];
 
                 if (parserFunc) {
-                    // Use 'let' to allow modification
                     let records = parserFunc(data, config, fundName, sheet);
 
-                    // ★★★ CORE FIX: POST-PROCESSING STEP ★★★
-                    // After any parser runs, check if it's the business cash flow statement.
-                    // If so, apply the suffix logic regardless of which parser was configured.
                     if (reportKey === '現金流量表' && selectedFundType === 'business' && records && records.length > 0) {
                         records = applyCashFlowSuffixesByOrder(records, config.keyColumn);
                     }
