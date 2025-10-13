@@ -1,5 +1,7 @@
 // main.js
 
+console.log("main.js script started executing."); // DEBUG: Check if script starts
+
 import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CASH_FLOW_ACCOUNT_ORDER } from './config.js';
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
@@ -146,7 +148,6 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
         
-        // ★★★ 終極修正：重寫加總邏輯，確保唯一性和正確性 ★★★
         const aggregatedMap = new Map();
         allExtractedData[reportKey].forEach(row => {
             const originalKeyText = row[keyColumn];
@@ -159,7 +160,7 @@ function displayAggregated() {
 
             if (!aggregatedRow) {
                 aggregatedRow = {
-                    [keyColumn]: String(originalKeyText).trim(), // 儲存清理過的顯示名稱
+                    [keyColumn]: String(originalKeyText).trim(), 
                     'indent_level': row.indent_level || 0
                 };
                 numericCols.forEach(col => aggregatedRow[col] = 0);
@@ -574,4 +575,6 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         </tbody></table>`;
     return table;
 }
-```--- END OF FILE main.js ---
+
+console.log("main.js script parsed successfully."); // DEBUG: Check if script parses```
+--- END OF FILE main.js ---
