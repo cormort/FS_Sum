@@ -257,7 +257,7 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     return records;
 }
 
-// ★★★ 核心修正函式 ★★★
+// ★★★ 核心修正函式：按出現順序添加後綴 ★★★
 function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
     const startRow = 5; 
@@ -266,63 +266,46 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const keyColumn = config.keyColumn;
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
     
-    // 狀態變數，用來追蹤目前在哪個活動區塊
-    let currentActivity = ''; 
+    // 步驟 1: 初始化一個計數器，用於追蹤每個目標科目在檔案中出現的次數
+    const itemCounter = {
+        '收取利息': 0,
+        '收取股利': 0,
+        '支付利息': 0
+    };
+    const targetItems = Object.keys(itemCounter);
 
     for (let i = startRow; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
         
-        let keyText = String(row[keyColIndex] || '').trim();
-        const normalizedKey = normalize(keyText);
-        
-        // 解析到報表末尾的結束標記時，就停止處理
-        if (normalizedKey.includes('期末現金及約當現金')) {
-            // 匯入最後一行並結束
-            const record = { '基金名稱': fundName, [keyColumn]: keyText };
-            let hasMeaningfulData = false;
-            let indentLevel = 0;
-            try {
-                const cellAddress = XLSX.utils.encode_cell({ r: i, c: keyColIndex });
-                if (sheet[cellAddress]?.s?.alignment?.indent) indentLevel = sheet[cellAddress].s.alignment.indent;
-            } catch(e) {}
-            record.indent_level = indentLevel;
-            config.columns.forEach(colName => {
-                const colIndex = colMap[colName];
-                if (colIndex !== undefined) {
-                    const value = row[colIndex];
-                    record[colName] = value;
-                    if (colName !== config.keyColumn && value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
-                        hasMeaningfulData = true;
-                    }
-                } else {
-                    record[colName] = '';
-                }
-            });
-            if (hasMeaningfulData || keyText) {
-                records.push(record);
-            }
-            break; 
-        }
-
+        const keyText = String(row[keyColIndex] || '').trim();
         if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
-
-        // 步驟 1: 偵測到區塊標題時，更新狀態
-        if (normalizedKey.includes('營業活動之現金流量')) {
-            currentActivity = ' (營業活動)';
-        } else if (normalizedKey.includes('投資活動之現金流量')) {
-            currentActivity = ' (投資活動)';
-        } else if (normalizedKey.includes('籌資活動之現金流量')) {
-            currentActivity = ' (籌資活動)';
-        }
         
+        const normalizedKey = normalize(keyText);
         let finalKeyText = keyText;
         
-        // 步驟 2: 如果是目標科目，且處於某個活動區塊中，就加上後綴
-        if (['收取利息', '收取股利', '支付利息'].includes(normalizedKey)) {
-            // 確保有活動狀態，並且原始科目不包含後綴（避免重複添加）
-            if (currentActivity && !keyText.includes('(營業活動)') && !keyText.includes('(投資活動)') && !keyText.includes('(籌資活動)')) {
-                finalKeyText += currentActivity;
+        // 步驟 2: 檢查是否為目標科目
+        if (targetItems.includes(normalizedKey)) {
+            // 將此科目的計數加 1
+            itemCounter[normalizedKey]++;
+            const count = itemCounter[normalizedKey];
+            
+            let suffix = '';
+
+            // 步驟 3: 根據您提供的規則，基於出現次數和科目名稱決定後綴
+            if (count === 1) {
+                suffix = ' (營業活動)';
+            } else if (count === 2) {
+                if (normalizedKey === '支付利息') {
+                    suffix = ' (籌資活動)';
+                } else { // 收取利息, 收取股利
+                    suffix = ' (投資活動)';
+                }
+            }
+            
+            // 如果確定了後綴，就將其添加到科目名稱後面
+            if (suffix) {
+                finalKeyText += suffix;
             }
         }
         
@@ -348,6 +331,7 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
                 record[colName] = '';
             }
         });
+
         if (hasMeaningfulData || finalKeyText) {
             records.push(record);
         }
