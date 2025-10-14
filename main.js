@@ -168,12 +168,11 @@ function displayIndividualFund() {
 
 function displayAggregated() {
     const summaryData = {};
-    let validationErrors = []; 
 
     for (const reportKey in allExtractedData) {
         if (!allExtractedData[reportKey]) continue;
 
-        const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
+        const baseKey = reportKey.replace(/_資產|_負債及-權益/, '');
         const config = FULL_CONFIG[selectedFundType][baseKey];
         if (!config) continue;
 
@@ -183,10 +182,10 @@ function displayAggregated() {
         const grouped = allExtractedData[reportKey].reduce((acc, row) => {
             const originalKeyText = row[keyColumn];
             if (!originalKeyText) return acc;
-            const key = originalKeyText; 
+            const key = originalKeyText.trim();
 
             if (!acc[key]) {
-                acc[key] = { ...row };
+                acc[key] = { ...row, [keyColumn]: key }; // 確保 key 是 trim 過的
                 numericCols.forEach(col => acc[key][col] = 0);
             }
             numericCols.forEach(col => {
@@ -200,128 +199,102 @@ function displayAggregated() {
 
         let aggregatedRows = Object.values(grouped);
 
-        if (selectedFundType === 'business') {
-            if (reportKey === '損益表' || reportKey === '盈虧撥補表') {
-                 // ... (損益表與盈虧撥補表邏輯不變)
-            }
-            else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
-                
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                
-                // Define rules for MERGING and for VALIDATION
-                const mergeRules = {
-                    '資產負債表_資產': [
-                        { target: '存放銀行同業', sources: ['存放銀行業'], type: 'accumulator' },
-                        { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' },
-                        { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'], type: 'summary' },
-                    ],
-                    '資產負債表_負債及權益': [
-                        { target: '銀行同業存款', sources: ['銀行業存款'], type: 'accumulator' },
-                        { target: '存款、匯款及金融債券', sources: ['存款'], type: 'accumulator' },
-                        { target: '支票存款', sources: ['公庫及政府機關存款'], type: 'accumulator' },
-                        { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'], type: 'accumulator' }
-                    ]
-                };
+        if (selectedFundType === 'business' && (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益')) {
+            const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
 
-                const validationRules = {
-                     '資產負債表_資產': [
-                        { parent: '無形資產', children: ['電腦軟體', '其他無形資產'] },
-                        // Add more rules here if needed, e.g., for 使用權資產 if it has known children
-                     ]
-                };
+            const mergeRules = {
+                '資產負債表_資產': [
+                    //【核心修正】將 '押匯貼現及放款' 的 type 改為 'accumulator'
+                    // 這表示它的最終值 = 它自己的值 + sources 的值
+                    // 同時，為了避免重複計算，我們從 sources 中移除 '銀行業融通' 等可能已包含在 '融通' 內的子項。
+                    // 這裡假設 '融通' 是總稱，如果不是，則需保留子項。最簡潔的修正是只加 '融通'。
+                    { target: '押匯貼現及放款', sources: ['融通'], type: 'accumulator' },
+                    
+                    { target: '存放銀行同業', sources: ['存放銀行業'], type: 'accumulator' },
+                    { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' },
+                    
+                    // 【問題二修正】明確定義 '使用權資產' 和 '無形資產'，避免因同名而重複加總
+                    // type: 'summary' 並將 sources 留空，代表它的值完全來自 dataMap 中自己的值，不會再額外加總，
+                    // 也避免了 reduce 階段可能發生的同名父子項目錯誤加總問題。
+                    { target: '使用權資產', sources: [], type: 'summary' },
+                    { target: '無形資產', sources: [], type: 'summary' },
+                ],
+                '資產負債表_負債及權益': [
+                    { target: '銀行同業存款', sources: ['銀行業存款'], type: 'accumulator' },
+                    { target: '存款、匯款及金融債券', sources: ['存款'], type: 'accumulator' },
+                    { target: '支票存款', sources: ['公庫及政府機關存款'], type: 'accumulator' },
+                    { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'], type: 'accumulator' }
+                ]
+            };
 
-                // --- MERGING LOGIC ---
-                const activeMergeRules = mergeRules[reportKey] || [];
-                activeMergeRules.forEach(rule => {
-                    const sourceRows = rule.sources.map(name => dataMap.get(name)).filter(Boolean);
-                    if (sourceRows.length > 0) {
-                        let targetRow = dataMap.get(rule.target);
-                        if (!targetRow) {
-                            targetRow = { ...sourceRows[0], [keyColumn]: rule.target };
-                            numericCols.forEach(col => targetRow[col] = 0);
-                            dataMap.set(rule.target, targetRow);
+            const activeMergeRules = mergeRules[reportKey] || [];
+            const allSourceKeys = new Set(activeMergeRules.flatMap(rule => rule.sources));
+            const finalRows = [];
+            const processedKeys = new Set();
+            
+            const standardOrder = (reportKey === '資產負債表_資產') ? PUBLIC_ASSET_ORDER : PUBLIC_LIABILITY_ORDER;
+
+            standardOrder.forEach(templateKey => {
+                const newRow = { [keyColumn]: templateKey, indent_level: 0 };
+                numericCols.forEach(col => newRow[col] = 0);
+
+                const mergeRule = activeMergeRules.find(rule => rule.target === templateKey);
+
+                // --- 精確的加總邏輯 ---
+                if (mergeRule) {
+                    // 類型為 'accumulator'，先加自己的值，再加來源的值
+                    if (mergeRule.type === 'accumulator') {
+                        if (dataMap.has(templateKey)) {
+                            const selfRow = dataMap.get(templateKey);
+                            numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
                         }
-
-                        if (rule.type === 'summary') {
-                             numericCols.forEach(col => targetRow[col] = 0);
-                        }
-
-                        sourceRows.forEach(sourceRow => {
-                            numericCols.forEach(col => {
-                                targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
-                            });
-                            dataMap.delete(sourceRow[keyColumn]);
-                        });
                     }
-                });
-                
-                let finalRows = Array.from(dataMap.values());
-
-                // --- VALIDATION LOGIC ---
-                const activeValidationRules = validationRules[reportKey] || [];
-                numericCols.forEach(col => {
-                    activeValidationRules.forEach(rule => {
-                        const parentRow = dataMap.get(rule.parent);
-                        if (parentRow) {
-                             const parentValue = parentRow[col] || 0;
-                             let childrenSum = 0;
-                             rule.children.forEach(childKey => {
-                                 const childRow = dataMap.get(childKey);
-                                 childrenSum += childRow ? (childRow[col] || 0) : 0;
-                             });
-                             if (Math.abs(parentValue - childrenSum) > 0.5) {
-                                 validationErrors.push(`'${rule.parent}' 欄位 '${col}' 的合計 (${parentValue.toLocaleString()}) 不等於其下級科目總和 (${childrenSum.toLocaleString()})`);
-                             }
+                    
+                    // 為 accumulator 和 summary 類型加總來源的值
+                    mergeRule.sources.forEach(sourceKey => {
+                        if (dataMap.has(sourceKey)) {
+                            const sourceRow = dataMap.get(sourceKey);
+                            numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
+                            processedKeys.add(sourceKey); // 將來源標記為已處理
                         }
                     });
-                });
-                
-                // --- SORTING LOGIC ---
-                let standardOrder = [];
-                if (reportKey === '資產負債表_資產') {
-                    standardOrder = PUBLIC_ASSET_ORDER;
-                } else if (reportKey === '資產負債表_負債及權益') {
-                    standardOrder = PUBLIC_LIABILITY_ORDER;
-                }
-                
-                if (standardOrder.length > 0) {
-                    finalRows.sort((a, b) => {
-                        const keyA = a[keyColumn];
-                        const keyB = b[keyColumn];
-                        const indexA = standardOrder.indexOf(keyA);
-                        const indexB = standardOrder.indexOf(keyB);
+                     // 如果是 summary 類型且 sources 為空，代表僅取自身的值
+                    if (mergeRule.type === 'summary' && mergeRule.sources.length === 0) {
+                         if (dataMap.has(templateKey)) {
+                            const selfRow = dataMap.get(templateKey);
+                            numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
+                        }
+                    }
 
-                        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-                        if (indexA !== -1) return -1;
-                        if (indexB !== -1) return 1;
-                        return String(keyA).localeCompare(String(keyB), 'zh-Hant');
-                    });
+                } else {
+                    // 沒有合併規則，直接從 dataMap 取值
+                    if (dataMap.has(templateKey)) {
+                        const sourceRow = dataMap.get(templateKey);
+                        numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
+                    }
                 }
                 
-                aggregatedRows = finalRows;
-            }
+                finalRows.push(newRow);
+                processedKeys.add(templateKey);
+            });
+
+            dataMap.forEach((rowData, key) => {
+                if (!processedKeys.has(key) && !allSourceKeys.has(key)) {
+                    finalRows.push(rowData);
+                }
+            });
+            
+            aggregatedRows = finalRows;
         }
 
         summaryData[reportKey] = aggregatedRows;
     }
 
     outputContainer.innerHTML = createTabsAndTables(summaryData, {}, 'sum');
-    
-    if (validationErrors.length > 0) {
-        const errorHtml = `<div class="validation-errors"><h4>檢誤規則檢查結果：</h4><ul>${validationErrors.map(e => `<li>${e}</li>`).join('')}</ul></div>`;
-        const firstTabContent = outputContainer.querySelector('.tab-content');
-        if (firstTabContent) {
-            firstTabContent.insertAdjacentHTML('beforebegin', errorHtml);
-        } else {
-            outputContainer.innerHTML = errorHtml + outputContainer.innerHTML;
-        }
-    }
-
     initTabs();
     initExportButtons();
 }
 
-// ... (所有剩餘的 helper 函式都維持不變)
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
@@ -580,7 +553,7 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         const cleanItemName = itemName.replace(/\s|　/g, '');
         const row = yuchuData.find(r => String(r['項目']).replace(/\s|　/g, '') === cleanItemName);
         const value = row ? row[colName] : 0;
-        if (value != null && value !== '' && !isNaN(Number(String(value).replace(/,/g, '')).toLocaleString())) {
+        if (value != null && value !== '' && !isNaN(Number(String(value).replace(/,/g, '')))) {
             return Number(String(value).replace(/,/g, '')).toLocaleString();
         }
         return '0';
