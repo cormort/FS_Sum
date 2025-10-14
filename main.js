@@ -168,125 +168,102 @@ function displayIndividualFund() {
 
 function displayAggregated() {
     const summaryData = {};
+    const reportKeys = Object.keys(allExtractedData).filter(k => allExtractedData[k] && allExtractedData[k].length > 0);
 
-    for (const reportKey in allExtractedData) {
-        if (!allExtractedData[reportKey]) continue;
-
+    for (const reportKey of reportKeys) {
         const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
-        const config = FULL_CONFIG[selectedFundType][baseKey];
+        const config = FULL_CONFIG[selectedFundType]?.[baseKey];
         if (!config) continue;
 
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        // 步驟一：精確加總，保留所有層級的資料
-        // 依然使用 "科目名稱::層級" 作為唯一鍵，確保父子科目資料不互相污染
-        const aggregationMap = new Map();
-        allExtractedData[reportKey].forEach(row => {
-            const keyText = row[keyColumn]?.trim();
-            if (!keyText) return;
-            
-            const indent = row.indent_level || row.indent || 0;
-            const compositeKey = `${keyText}::${indent}`;
-
-            if (!aggregationMap.has(compositeKey)) {
-                const newRow = { ...row, [keyColumn]: keyText, 'indent_level': indent };
-                numericCols.forEach(col => {
-                    newRow[col] = parseFloat(String(newRow[col] || '0').replace(/,/g, '')) || 0;
-                });
-                aggregationMap.set(compositeKey, newRow);
-            } else {
-                const existingRow = aggregationMap.get(compositeKey);
-                numericCols.forEach(col => {
-                    const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
-                    if (!isNaN(val)) existingRow[col] += val;
-                });
-            }
-        });
-
-        // 對營業基金的數值進行四捨五入
-        if (selectedFundType === 'business') {
-            aggregationMap.forEach(row => {
-                numericCols.forEach(col => row[col] = Math.round(row[col]));
-            });
+        // 步驟一：初始化最終結果的容器 (Map)，並預先填入所有標準科目，確保順序
+        const finalTotals = new Map();
+        let standardOrder = [];
+        if (selectedFundType === 'business' && (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益')) {
+             standardOrder = (reportKey === '資產負債表_資產') ? PUBLIC_ASSET_ORDER : PUBLIC_LIABILITY_ORDER;
+        } else {
+             // 對於非資產負債表，從資料中動態獲取順序
+             const uniqueKeys = new Set(allExtractedData[reportKey].map(row => row[keyColumn]?.trim()).filter(Boolean));
+             standardOrder = Array.from(uniqueKeys);
         }
         
-        const allRows = Array.from(aggregationMap.values());
-        
-        // 僅對營業基金的資產負債表應用特殊過濾和合併規則
-        if (selectedFundType === 'business' && (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益')) {
-            
-            // 步驟二：【參照作業基金處理邏輯的核心】建立權威 dataMap
-            // 遍歷所有加總後的資料，對於任何一個科目名稱，只採納其層級最低（indent_level 最小）的那一筆。
-            // 這能確保「無形資產」只會採用父科目的資料，而同名的子科目資料會被自然地過濾掉。
-            const dataMap = new Map();
-            for (const row of allRows) {
-                const key = row[keyColumn];
-                // 如果 dataMap 中還沒有這個科目，或者遇到的這筆資料層級比已有的更低（更上層），就更新它。
-                if (!dataMap.has(key) || row.indent_level < dataMap.get(key).indent_level) {
-                    dataMap.set(key, row);
-                }
-            }
-            
-            const mergeRules = {
-                '資產負債表_資產': [
-                    { target: '押匯貼現及放款', sources: ['融通'], type: 'accumulator' },
-                    { target: '存放銀行同業', sources: ['存放銀行業'], type: 'accumulator' },
-                    { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' },
-                ],
-                '資產負債表_負債及權益': [
-                    { target: '銀行同業存款', sources: ['銀行業存款'], type: 'accumulator' },
-                    { target: '存款、匯款及金融債券', sources: ['存款'], type: 'accumulator' },
-                    { target: '支票存款', sources: ['公庫及政府機關存款'], type: 'accumulator' },
-                    { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'], type: 'accumulator' }
-                ]
-            };
+        standardOrder.forEach(key => {
+            const newRow = { [keyColumn]: key };
+            numericCols.forEach(col => newRow[col] = 0);
+            finalTotals.set(key, newRow);
+        });
 
-            const activeMergeRules = mergeRules[reportKey] || [];
-            const allSourceKeys = new Set(activeMergeRules.flatMap(rule => rule.sources));
-            const finalRows = [];
-            
-            const standardOrder = (reportKey === '資產負債表_資產') ? PUBLIC_ASSET_ORDER : PUBLIC_LIABILITY_ORDER;
+        // 獲取所有基金的名稱
+        const fundNames = [...new Set(allExtractedData[reportKey].map(r => r['基金名稱']))];
 
-            // 步驟三：基於完全乾淨的 dataMap 生成報表
-            standardOrder.forEach(templateKey => {
-                // 如果一個科目是其他科目的來源（例如'融通'），它就不應該獨立顯示為一行
-                if (allSourceKeys.has(templateKey)) {
-                    return;
+        // 步驟二：【核心邏輯】逐個基金進行處理
+        for (const fundName of fundNames) {
+            // 對於每個基金，都使用一個新的 Set 來追蹤已處理的科目
+            const processedAccountsThisFund = new Set();
+            const rowsForThisFund = allExtractedData[reportKey].filter(r => r['基金名稱'] === fundName);
+
+            // 由上到下遍歷該基金的所有資料行
+            for (const row of rowsForThisFund) {
+                const accountName = row[keyColumn]?.trim();
+
+                // 如果科目名稱不存在，或在本基金中已處理過，則直接跳過
+                if (!accountName || processedAccountsThisFund.has(accountName)) {
+                    continue;
                 }
 
-                const newRow = { [keyColumn]: templateKey };
-                numericCols.forEach(col => newRow[col] = 0);
-
-                const mergeRule = activeMergeRules.find(rule => rule.target === templateKey);
-
-                if (mergeRule) {
-                    // accumulator: 自己 + 來源
-                    if (mergeRule.type === 'accumulator' && dataMap.has(templateKey)) {
-                        const selfRow = dataMap.get(templateKey);
-                        numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
-                    }
-                    mergeRule.sources.forEach(sourceKey => {
-                        if (dataMap.has(sourceKey)) {
-                            const sourceRow = dataMap.get(sourceKey);
-                            numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
+                // 如果該科目是標準科目之一
+                if (finalTotals.has(accountName)) {
+                    const totalRow = finalTotals.get(accountName);
+                    // 累加數值
+                    numericCols.forEach(col => {
+                        const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
+                        if (!isNaN(val)) {
+                            totalRow[col] += (selectedFundType === 'business' ? Math.round(val) : val);
                         }
                     });
-                } else {
-                    // 普通科目：直接取值
-                    if (dataMap.has(templateKey)) {
-                        const sourceRow = dataMap.get(templateKey);
-                        numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
-                    }
+                    // 將此科目標記為「在本基金中已處理」
+                    processedAccountsThisFund.add(accountName);
                 }
+            }
+        }
+        
+        // 步驟三：在所有基金都加總完畢後，才應用合併規則
+        if (selectedFundType === 'business' && (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益')) {
+            const mergeRules = {
+                '資產負債表_資產': [ { target: '押匯貼現及放款', sources: ['融通'], type: 'accumulator' } ],
+                // 可在此處添加其他負債及權益的合併規則
+            };
+            const activeMergeRules = mergeRules[reportKey] || [];
+            const allSourceKeys = new Set();
+
+            activeMergeRules.forEach(rule => {
+                const targetRow = finalTotals.get(rule.target);
+                if (!targetRow) return;
                 
-                finalRows.push(newRow);
+                rule.sources.forEach(sourceKey => {
+                    allSourceKeys.add(sourceKey); // 標記來源科目，以便後續隱藏
+                    const sourceRow = finalTotals.get(sourceKey);
+                    if (sourceRow) {
+                        numericCols.forEach(col => {
+                            targetRow[col] += sourceRow[col];
+                        });
+                    }
+                });
             });
-            
+
+            // 從 Map 轉換為陣列，並過濾掉作為來源的科目
+            const finalRows = [];
+            finalTotals.forEach((row, key) => {
+                if (!allSourceKeys.has(key)) {
+                    finalRows.push(row);
+                }
+            });
             summaryData[reportKey] = finalRows;
+
         } else {
-            // 對於其他報表，直接使用初步彙總的結果
-            summaryData[reportKey] = allRows;
+             summaryData[reportKey] = Array.from(finalTotals.values());
         }
     }
 
