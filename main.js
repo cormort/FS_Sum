@@ -168,6 +168,7 @@ function displayIndividualFund() {
 
 function displayAggregated() {
     const summaryData = {};
+    let validationErrors = []; 
 
     for (const reportKey in allExtractedData) {
         if (!allExtractedData[reportKey]) continue;
@@ -201,16 +202,17 @@ function displayAggregated() {
 
         if (selectedFundType === 'business') {
             if (reportKey === '損益表' || reportKey === '盈虧撥補表') {
-                // ... (損益表與盈虧撥補表邏輯不變)
+                 // ... (損益表與盈虧撥補表邏輯不變)
             }
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 
                 const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
                 
+                // Define rules for MERGING and for VALIDATION
                 const mergeRules = {
                     '資產負債表_資產': [
                         { target: '存放銀行同業', sources: ['存放銀行業'], type: 'accumulator' },
-                        { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' }, // ★★★ 核心修正 ★★★
+                        { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' },
                         { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'], type: 'summary' },
                     ],
                     '資產負債表_負債及權益': [
@@ -221,65 +223,105 @@ function displayAggregated() {
                     ]
                 };
 
+                const validationRules = {
+                     '資產負債表_資產': [
+                        { parent: '無形資產', children: ['電腦軟體', '其他無形資產'] },
+                        // Add more rules here if needed, e.g., for 使用權資產 if it has known children
+                     ]
+                };
+
+                // --- MERGING LOGIC ---
                 const activeMergeRules = mergeRules[reportKey] || [];
-                const allSourceKeys = new Set(activeMergeRules.flatMap(rule => rule.sources));
-                const finalRows = [];
-                const processedKeys = new Set();
+                activeMergeRules.forEach(rule => {
+                    const sourceRows = rule.sources.map(name => dataMap.get(name)).filter(Boolean);
+                    if (sourceRows.length > 0) {
+                        let targetRow = dataMap.get(rule.target);
+                        if (!targetRow) {
+                            targetRow = { ...sourceRows[0], [keyColumn]: rule.target };
+                            numericCols.forEach(col => targetRow[col] = 0);
+                            dataMap.set(rule.target, targetRow);
+                        }
+
+                        if (rule.type === 'summary') {
+                             numericCols.forEach(col => targetRow[col] = 0);
+                        }
+
+                        sourceRows.forEach(sourceRow => {
+                            numericCols.forEach(col => {
+                                targetRow[col] = (targetRow[col] || 0) + (sourceRow[col] || 0);
+                            });
+                            dataMap.delete(sourceRow[keyColumn]);
+                        });
+                    }
+                });
                 
+                let finalRows = Array.from(dataMap.values());
+
+                // --- VALIDATION LOGIC ---
+                const activeValidationRules = validationRules[reportKey] || [];
+                numericCols.forEach(col => {
+                    activeValidationRules.forEach(rule => {
+                        const parentRow = dataMap.get(rule.parent);
+                        if (parentRow) {
+                             const parentValue = parentRow[col] || 0;
+                             let childrenSum = 0;
+                             rule.children.forEach(childKey => {
+                                 const childRow = dataMap.get(childKey);
+                                 childrenSum += childRow ? (childRow[col] || 0) : 0;
+                             });
+                             if (Math.abs(parentValue - childrenSum) > 0.5) {
+                                 validationErrors.push(`'${rule.parent}' 欄位 '${col}' 的合計 (${parentValue.toLocaleString()}) 不等於其下級科目總和 (${childrenSum.toLocaleString()})`);
+                             }
+                        }
+                    });
+                });
+                
+                // --- SORTING LOGIC ---
                 let standardOrder = [];
                 if (reportKey === '資產負債表_資產') {
                     standardOrder = PUBLIC_ASSET_ORDER;
                 } else if (reportKey === '資產負債表_負債及權益') {
                     standardOrder = PUBLIC_LIABILITY_ORDER;
                 }
-
+                
                 if (standardOrder.length > 0) {
-                    standardOrder.forEach(templateKey => {
-                        const newRow = { [keyColumn]: templateKey, indent_level: 0 };
-                        numericCols.forEach(col => newRow[col] = 0);
+                    finalRows.sort((a, b) => {
+                        const keyA = a[keyColumn];
+                        const keyB = b[keyColumn];
+                        const indexA = standardOrder.indexOf(keyA);
+                        const indexB = standardOrder.indexOf(keyB);
 
-                        const mergeRule = activeMergeRules.find(rule => rule.target === templateKey);
-
-                        if (mergeRule) {
-                            if (mergeRule.type === 'accumulator') {
-                                if (dataMap.has(templateKey)) {
-                                    const selfRow = dataMap.get(templateKey);
-                                    numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
-                                }
-                            }
-                            mergeRule.sources.forEach(sourceKey => {
-                                if (dataMap.has(sourceKey)) {
-                                    const sourceRow = dataMap.get(sourceKey);
-                                    numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
-                                }
-                            });
-                        } else if (dataMap.has(templateKey)) {
-                            const sourceRow = dataMap.get(templateKey);
-                            numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
-                        }
-                        
-                        finalRows.push(newRow);
-                        processedKeys.add(templateKey);
+                        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+                        if (indexA !== -1) return -1;
+                        if (indexB !== -1) return 1;
+                        return String(keyA).localeCompare(String(keyB), 'zh-Hant');
                     });
-
-                    dataMap.forEach((rowData, key) => {
-                        if (!processedKeys.has(key) && !allSourceKeys.has(key)) {
-                            finalRows.push(rowData);
-                        }
-                    });
-                    
-                    aggregatedRows = finalRows;
                 }
+                
+                aggregatedRows = finalRows;
             }
         }
 
         summaryData[reportKey] = aggregatedRows;
     }
+
     outputContainer.innerHTML = createTabsAndTables(summaryData, {}, 'sum');
+    
+    if (validationErrors.length > 0) {
+        const errorHtml = `<div class="validation-errors"><h4>檢誤規則檢查結果：</h4><ul>${validationErrors.map(e => `<li>${e}</li>`).join('')}</ul></div>`;
+        const firstTabContent = outputContainer.querySelector('.tab-content');
+        if (firstTabContent) {
+            firstTabContent.insertAdjacentHTML('beforebegin', errorHtml);
+        } else {
+            outputContainer.innerHTML = errorHtml + outputContainer.innerHTML;
+        }
+    }
+
     initTabs();
     initExportButtons();
 }
 
+// ... (所有剩餘的 helper 函式都維持不變)
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
@@ -538,7 +580,7 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
         const cleanItemName = itemName.replace(/\s|　/g, '');
         const row = yuchuData.find(r => String(r['項目']).replace(/\s|　/g, '') === cleanItemName);
         const value = row ? row[colName] : 0;
-        if (value != null && value !== '' && !isNaN(Number(String(value).replace(/,/g, '')))) {
+        if (value != null && value !== '' && !isNaN(Number(String(value).replace(/,/g, '')).toLocaleString())) {
             return Number(String(value).replace(/,/g, '')).toLocaleString();
         }
         return '0';
