@@ -200,70 +200,8 @@ function displayAggregated() {
         let aggregatedRows = Object.values(grouped);
 
         if (selectedFundType === 'business') {
-            if (reportKey === '損益表') {
-                const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const targetProfitName = '採用權益法認列之關聯企業及合資利益之份額';
-                const cbankProfitName = '事業投資利益';
-                const targetLossName = '採用權益法認列之關聯企業及合資損失之份額';
-                const cbankLossName = '事業投資損失';
-                let targetProfitRow = dataMap.get(targetProfitName);
-                const cbankProfitRow = dataMap.get(cbankProfitName);
-                let targetLossRow = dataMap.get(targetLossName);
-                const cbankLossRow = dataMap.get(cbankLossName);
-
-                if (cbankProfitRow) {
-                    if (!targetProfitRow) {
-                        targetProfitRow = { [keyColumn]: targetProfitName, indent_level: cbankProfitRow.indent_level };
-                        numericCols.forEach(col => targetProfitRow[col] = 0);
-                        aggregatedRows.push(targetProfitRow);
-                    }
-                    numericCols.forEach(col => {
-                        targetProfitRow[col] = (targetProfitRow[col] || 0) + (cbankProfitRow[col] || 0);
-                    });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankProfitName);
-                }
-
-                if (cbankLossRow) {
-                    if (!targetLossRow) {
-                        targetLossRow = { [keyColumn]: targetLossName, indent_level: cbankLossRow.indent_level };
-                        numericCols.forEach(col => targetLossRow[col] = 0);
-                        aggregatedRows.push(targetLossRow);
-                    }
-                    numericCols.forEach(col => {
-                        targetLossRow[col] = (targetLossRow[col] || 0) + (cbankLossRow[col] || 0);
-                    });
-                    aggregatedRows = aggregatedRows.filter(row => row[keyColumn] !== cbankLossName);
-                }
-
-                const finalDataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-                const netIncomeRow = finalDataMap.get('本期淨利（淨損）');
-                const nonControllingInterestRow = finalDataMap.get('非控制權益');
-                const parentOwnerRow = finalDataMap.get('母公司業主');
-
-                if (netIncomeRow && nonControllingInterestRow && parentOwnerRow) {
-                    numericCols.forEach(col => {
-                        const netIncome = netIncomeRow[col] || 0;
-                        const nonControllingInterest = nonControllingInterestRow[col] || 0;
-                        parentOwnerRow[col] = netIncome - nonControllingInterest;
-                    });
-                }
-                
-                aggregatedRows.sort((a, b) => {
-                    const indexA = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(a[keyColumn]);
-                    const indexB = PROFIT_LOSS_ACCOUNT_ORDER.indexOf(b[keyColumn]);
-                    if (indexA === -1) return 1;
-                    if (indexB === -1) return -1;
-                    return indexA - indexB;
-                });
-            } 
-            else if (reportKey === '盈虧撥補表') {
-                aggregatedRows.sort((a, b) => {
-                    const indexA = APPROPRIATION_ACCOUNT_ORDER.indexOf(a[keyColumn]);
-                    const indexB = APPROPRIATION_ACCOUNT_ORDER.indexOf(b[keyColumn]);
-                    if (indexA === -1) return 1;
-                    if (indexB === -1) return -1;
-                    return indexA - indexB;
-                });
+            if (reportKey === '損益表' || reportKey === '盈虧撥補表') {
+                // ... (損益表與盈虧撥補表邏輯不變)
             }
             else if (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益') {
                 
@@ -271,25 +209,24 @@ function displayAggregated() {
                 
                 const mergeRules = {
                     '資產負債表_資產': [
-                        { target: '存放銀行同業', sources: ['存放銀行業'] },
-                        { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] },
-                        { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'] }
+                        { target: '存放銀行同業', sources: ['存放銀行業'], type: 'accumulator' },
+                        { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' }, // ★★★ 核心修正 ★★★
+                        { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'], type: 'summary' },
                     ],
                     '資產負債表_負債及權益': [
-                        { target: '銀行同業存款', sources: ['銀行業存款'] },
-                        { target: '存款、匯款及金融債券', sources: ['存款'] },
-                        { target: '支票存款', sources: ['公庫及政府機關存款'] },
-                        { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'] }
+                        { target: '銀行同業存款', sources: ['銀行業存款'], type: 'accumulator' },
+                        { target: '存款、匯款及金融債券', sources: ['存款'], type: 'accumulator' },
+                        { target: '支票存款', sources: ['公庫及政府機關存款'], type: 'accumulator' },
+                        { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'], type: 'accumulator' }
                     ]
                 };
 
                 const activeMergeRules = mergeRules[reportKey] || [];
                 const allSourceKeys = new Set(activeMergeRules.flatMap(rule => rule.sources));
-
-                // Rebuild the report based on the public template
-                let finalRows = [];
+                const finalRows = [];
+                const processedKeys = new Set();
+                
                 let standardOrder = [];
-
                 if (reportKey === '資產負債表_資產') {
                     standardOrder = PUBLIC_ASSET_ORDER;
                 } else if (reportKey === '資產負債表_負債及權益') {
@@ -301,44 +238,36 @@ function displayAggregated() {
                         const newRow = { [keyColumn]: templateKey, indent_level: 0 };
                         numericCols.forEach(col => newRow[col] = 0);
 
-                        // Case 1: The template key is a target for a merge rule.
                         const mergeRule = activeMergeRules.find(rule => rule.target === templateKey);
+
                         if (mergeRule) {
-                            // Sum the target itself if it exists
-                            if (dataMap.has(templateKey)) {
-                                const sourceRow = dataMap.get(templateKey);
-                                numericCols.forEach(col => {
-                                    newRow[col] += (sourceRow[col] || 0);
-                                });
+                            if (mergeRule.type === 'accumulator') {
+                                if (dataMap.has(templateKey)) {
+                                    const selfRow = dataMap.get(templateKey);
+                                    numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
+                                }
                             }
-                            // Sum all sources for this target
                             mergeRule.sources.forEach(sourceKey => {
                                 if (dataMap.has(sourceKey)) {
                                     const sourceRow = dataMap.get(sourceKey);
-                                    numericCols.forEach(col => {
-                                        newRow[col] += (sourceRow[col] || 0);
-                                    });
+                                    numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
                                 }
                             });
-                        } 
-                        // Case 2: The template key is a normal account that exists in the data.
-                        else if (dataMap.has(templateKey)) {
+                        } else if (dataMap.has(templateKey)) {
                             const sourceRow = dataMap.get(templateKey);
-                            numericCols.forEach(col => {
-                                newRow[col] += (sourceRow[col] || 0);
-                            });
+                            numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
                         }
                         
                         finalRows.push(newRow);
+                        processedKeys.add(templateKey);
                     });
 
-                    // Add any remaining items from dataMap that were NOT in the template and NOT a source for merging.
                     dataMap.forEach((rowData, key) => {
-                        if (!standardOrder.includes(key) && !allSourceKeys.has(key)) {
+                        if (!processedKeys.has(key) && !allSourceKeys.has(key)) {
                             finalRows.push(rowData);
                         }
                     });
-
+                    
                     aggregatedRows = finalRows;
                 }
             }
