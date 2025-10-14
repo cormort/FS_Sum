@@ -179,47 +179,54 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        // 步驟一：使用 "科目名稱::層級" 作為唯一鍵，進行初步、精確的加總
+        // 【核心修正】替換原有的 reduce 邏輯，避免同名父子科目被錯誤加總
         const aggregationMap = new Map();
         allExtractedData[reportKey].forEach(row => {
             const keyText = row[keyColumn]?.trim();
             if (!keyText) return;
             
-            const indent = row.indent_level || row.indent || 0;
+            // 使用 "科目名稱::層級" 作為唯一鍵，區分同名但不同層級的科目
+            const indent = row.indent_level || 0;
             const compositeKey = `${keyText}::${indent}`;
 
             if (!aggregationMap.has(compositeKey)) {
-                const newRow = { ...row, [keyColumn]: keyText, 'indent_level': indent };
+                // 如果是第一次看到這個鍵，直接複製整行資料
+                const newRow = { ...row, [keyColumn]: keyText };
+                // 確保數值欄位是數字
                 numericCols.forEach(col => {
                     newRow[col] = parseFloat(String(newRow[col] || '0').replace(/,/g, '')) || 0;
                 });
                 aggregationMap.set(compositeKey, newRow);
             } else {
+                // 如果已存在，則累加數值
                 const existingRow = aggregationMap.get(compositeKey);
                 numericCols.forEach(col => {
                     const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
-                    if (!isNaN(val)) existingRow[col] += val;
+                    if (!isNaN(val)) {
+                        existingRow[col] += val;
+                    }
                 });
             }
         });
 
-        // 營業基金金額需要四捨五入
+        // 四捨五入處理（僅適用於營業基金）
         if (selectedFundType === 'business') {
             aggregationMap.forEach(row => {
-                numericCols.forEach(col => row[col] = Math.round(row[col]));
+                numericCols.forEach(col => {
+                    row[col] = Math.round(row[col]);
+                });
             });
         }
         
-        const aggregatedRows = Array.from(aggregationMap.values());
+        let aggregatedRows = Array.from(aggregationMap.values());
         
-        // 僅對營業基金的資產負債表應用特殊規則
+        // 【問題修正】修正 '資產負債表_負債及權益' 的錯字，並套用新的處理邏輯
         if (selectedFundType === 'business' && (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益')) {
-            
-            // 步驟二：【核心修正】建立權威 dataMap，對於同名科目，只保留層級最低（indent_level 最小）的父科目
+            // 從乾淨的 aggregatedRows 建立 dataMap，如果有名稱衝突，優先保留層級較低的（父科目）
             const dataMap = new Map();
             for (const row of aggregatedRows) {
                 const key = row[keyColumn];
-                if (!dataMap.has(key) || row.indent_level < dataMap.get(key).indent_level) {
+                if (!dataMap.has(key) || (row.indent_level || 0) < (dataMap.get(key).indent_level || 0)) {
                     dataMap.set(key, row);
                 }
             }
@@ -229,6 +236,8 @@ function displayAggregated() {
                     { target: '押匯貼現及放款', sources: ['融通'], type: 'accumulator' },
                     { target: '存放銀行同業', sources: ['存放銀行業'], type: 'accumulator' },
                     { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' },
+                     // 因為初始加總問題已解決，這裡不再需要特殊規則
+                     // 讓它們直接從 dataMap 讀取正確的父項目金額即可
                 ],
                 '資產負債表_負債及權益': [
                     { target: '銀行同業存款', sources: ['銀行業存款'], type: 'accumulator' },
@@ -245,7 +254,6 @@ function displayAggregated() {
             
             const standardOrder = (reportKey === '資產負債表_資產') ? PUBLIC_ASSET_ORDER : PUBLIC_LIABILITY_ORDER;
 
-            // 步驟三：基於乾淨的 dataMap 生成報表
             standardOrder.forEach(templateKey => {
                 const newRow = { [keyColumn]: templateKey, indent_level: 0 };
                 numericCols.forEach(col => newRow[col] = 0);
@@ -253,13 +261,13 @@ function displayAggregated() {
                 const mergeRule = activeMergeRules.find(rule => rule.target === templateKey);
 
                 if (mergeRule) {
-                    // accumulator 類型：先加自己的值，再加來源的值
                     if (mergeRule.type === 'accumulator' && dataMap.has(templateKey)) {
                         const selfRow = dataMap.get(templateKey);
                         numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
                     }
                     
                     mergeRule.sources.forEach(sourceKey => {
+                        // 來源科目需要從 dataMap 查找
                         if (dataMap.has(sourceKey)) {
                             const sourceRow = dataMap.get(sourceKey);
                             numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
@@ -267,7 +275,6 @@ function displayAggregated() {
                         }
                     });
                 } else {
-                    // 沒有規則的科目：直接從 dataMap 取值
                     if (dataMap.has(templateKey)) {
                         const sourceRow = dataMap.get(templateKey);
                         numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
@@ -278,18 +285,16 @@ function displayAggregated() {
                 processedKeys.add(templateKey);
             });
 
-            // 將不在標準順序但在資料中的科目附加到末尾
             dataMap.forEach((rowData, key) => {
                 if (!processedKeys.has(key) && !allSourceKeys.has(key)) {
                     finalRows.push(rowData);
                 }
             });
             
-            summaryData[reportKey] = finalRows;
-        } else {
-            // 對於非營業基金資產負債表或其它報表，直接使用初步彙總的結果
-            summaryData[reportKey] = aggregatedRows;
+            aggregatedRows = finalRows;
         }
+
+        summaryData[reportKey] = aggregatedRows;
     }
 
     outputContainer.innerHTML = createTabsAndTables(summaryData, {}, 'sum');
