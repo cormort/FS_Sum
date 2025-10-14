@@ -172,52 +172,72 @@ function displayAggregated() {
     for (const reportKey in allExtractedData) {
         if (!allExtractedData[reportKey]) continue;
 
-        const baseKey = reportKey.replace(/_資產|_負債及-權益/, '');
+        const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
         const config = FULL_CONFIG[selectedFundType][baseKey];
         if (!config) continue;
 
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        const grouped = allExtractedData[reportKey].reduce((acc, row) => {
-            const originalKeyText = row[keyColumn];
-            if (!originalKeyText) return acc;
-            const key = originalKeyText.trim();
+        // 【核心修正】替換原有的 reduce 邏輯，避免同名父子科目被錯誤加總
+        const aggregationMap = new Map();
+        allExtractedData[reportKey].forEach(row => {
+            const keyText = row[keyColumn]?.trim();
+            if (!keyText) return;
+            
+            // 使用 "科目名稱::層級" 作為唯一鍵，區分同名但不同層級的科目
+            const indent = row.indent_level || 0;
+            const compositeKey = `${keyText}::${indent}`;
 
-            if (!acc[key]) {
-                acc[key] = { ...row, [keyColumn]: key }; // 確保 key 是 trim 過的
-                numericCols.forEach(col => acc[key][col] = 0);
+            if (!aggregationMap.has(compositeKey)) {
+                // 如果是第一次看到這個鍵，直接複製整行資料
+                const newRow = { ...row, [keyColumn]: keyText };
+                // 確保數值欄位是數字
+                numericCols.forEach(col => {
+                    newRow[col] = parseFloat(String(newRow[col] || '0').replace(/,/g, '')) || 0;
+                });
+                aggregationMap.set(compositeKey, newRow);
+            } else {
+                // 如果已存在，則累加數值
+                const existingRow = aggregationMap.get(compositeKey);
+                numericCols.forEach(col => {
+                    const val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
+                    if (!isNaN(val)) {
+                        existingRow[col] += val;
+                    }
+                });
             }
-            numericCols.forEach(col => {
-                let val = parseFloat(String(row[col] || '0').replace(/,/g, ''));
-                if (!isNaN(val)) {
-                    acc[key][col] += (selectedFundType === 'business' ? Math.round(val) : val);
-                }
+        });
+
+        // 四捨五入處理（僅適用於營業基金）
+        if (selectedFundType === 'business') {
+            aggregationMap.forEach(row => {
+                numericCols.forEach(col => {
+                    row[col] = Math.round(row[col]);
+                });
             });
-            return acc;
-        }, {});
-
-        let aggregatedRows = Object.values(grouped);
-
+        }
+        
+        let aggregatedRows = Array.from(aggregationMap.values());
+        
+        // 【問題修正】修正 '資產負債表_負債及權益' 的錯字，並套用新的處理邏輯
         if (selectedFundType === 'business' && (reportKey === '資產負債表_資產' || reportKey === '資產負債表_負債及權益')) {
-            const dataMap = new Map(aggregatedRows.map(row => [row[keyColumn], row]));
-
+            // 從乾淨的 aggregatedRows 建立 dataMap，如果有名稱衝突，優先保留層級較低的（父科目）
+            const dataMap = new Map();
+            for (const row of aggregatedRows) {
+                const key = row[keyColumn];
+                if (!dataMap.has(key) || (row.indent_level || 0) < (dataMap.get(key).indent_level || 0)) {
+                    dataMap.set(key, row);
+                }
+            }
+            
             const mergeRules = {
                 '資產負債表_資產': [
-                    //【核心修正】將 '押匯貼現及放款' 的 type 改為 'accumulator'
-                    // 這表示它的最終值 = 它自己的值 + sources 的值
-                    // 同時，為了避免重複計算，我們從 sources 中移除 '銀行業融通' 等可能已包含在 '融通' 內的子項。
-                    // 這裡假設 '融通' 是總稱，如果不是，則需保留子項。最簡潔的修正是只加 '融通'。
                     { target: '押匯貼現及放款', sources: ['融通'], type: 'accumulator' },
-                    
                     { target: '存放銀行同業', sources: ['存放銀行業'], type: 'accumulator' },
                     { target: '採用權益法之投資', sources: ['事業投資'], type: 'accumulator' },
-                    
-                    // 【問題二修正】明確定義 '使用權資產' 和 '無形資產'，避免因同名而重複加總
-                    // type: 'summary' 並將 sources 留空，代表它的值完全來自 dataMap 中自己的值，不會再額外加總，
-                    // 也避免了 reduce 階段可能發生的同名父子項目錯誤加總問題。
-                    { target: '使用權資產', sources: [], type: 'summary' },
-                    { target: '無形資產', sources: [], type: 'summary' },
+                     // 因為初始加總問題已解決，這裡不再需要特殊規則
+                     // 讓它們直接從 dataMap 讀取正確的父項目金額即可
                 ],
                 '資產負債表_負債及權益': [
                     { target: '銀行同業存款', sources: ['銀行業存款'], type: 'accumulator' },
@@ -240,34 +260,21 @@ function displayAggregated() {
 
                 const mergeRule = activeMergeRules.find(rule => rule.target === templateKey);
 
-                // --- 精確的加總邏輯 ---
                 if (mergeRule) {
-                    // 類型為 'accumulator'，先加自己的值，再加來源的值
-                    if (mergeRule.type === 'accumulator') {
-                        if (dataMap.has(templateKey)) {
-                            const selfRow = dataMap.get(templateKey);
-                            numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
-                        }
+                    if (mergeRule.type === 'accumulator' && dataMap.has(templateKey)) {
+                        const selfRow = dataMap.get(templateKey);
+                        numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
                     }
                     
-                    // 為 accumulator 和 summary 類型加總來源的值
                     mergeRule.sources.forEach(sourceKey => {
+                        // 來源科目需要從 dataMap 查找
                         if (dataMap.has(sourceKey)) {
                             const sourceRow = dataMap.get(sourceKey);
                             numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
-                            processedKeys.add(sourceKey); // 將來源標記為已處理
+                            processedKeys.add(sourceKey);
                         }
                     });
-                     // 如果是 summary 類型且 sources 為空，代表僅取自身的值
-                    if (mergeRule.type === 'summary' && mergeRule.sources.length === 0) {
-                         if (dataMap.has(templateKey)) {
-                            const selfRow = dataMap.get(templateKey);
-                            numericCols.forEach(col => newRow[col] += (selfRow[col] || 0));
-                        }
-                    }
-
                 } else {
-                    // 沒有合併規則，直接從 dataMap 取值
                     if (dataMap.has(templateKey)) {
                         const sourceRow = dataMap.get(templateKey);
                         numericCols.forEach(col => newRow[col] += (sourceRow[col] || 0));
