@@ -328,18 +328,19 @@ function displayAggregated() {
         const flattenedData = [];
         flattenTree(summaryTree, flattenedData, keyColumn, numericCols);
 
-        const standardOrder = {
+        const standardOrderMap = {
              '損益表': PROFIT_LOSS_ACCOUNT_ORDER,
              '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER,
              '現金流量表': CASH_FLOW_ACCOUNT_ORDER,
              '資產負債表_資產': PUBLIC_ASSET_ORDER,
              '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER
-        }[reportKey] || [];
+        };
+        const order = standardOrderMap[reportKey] || [];
         
         const finalRows = [];
         const processedItems = new Set();
 
-        standardOrder.forEach(accountName => {
+        order.forEach(accountName => {
             if (sourceKeysToHide.has(accountName)) return;
             const matchingRows = flattenedData.filter(row => row[keyColumn] === accountName);
             if (matchingRows.length > 0) {
@@ -354,7 +355,7 @@ function displayAggregated() {
             }
         });
         
-        flattenData.forEach(row => {
+        flattenedData.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
             if (!processedItems.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
                  if (selectedFundType === 'business') {
@@ -402,7 +403,6 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
             const tabName = reportKey.replace(/_/g, ' ');
             tabsHtml += `<button class="tab-link ${isFirst ? 'active' : ''}" data-tab="${reportKey}">${tabName}</button>`;
             
-            // 在個別基金模式下，標頭不應包含 "基金名稱"
             const headers = customHeaders[reportKey] || (mode === 'individual' ? columns : ['基金名稱', ...columns]);
             let tableContent = createTableHtml(data[reportKey], headers, mode);
             
@@ -432,9 +432,6 @@ function createTableHtml(records, headers, mode = 'default') {
     records.forEach(record => {
         table += '<tr>';
         headers.forEach(header => {
-            // 在非比較模式下，動態跳過 '基金名稱' 欄的渲染
-            if (header === '基金名稱' && mode !== 'comparison') return;
-
             const val = record[header];
             let displayVal = (val === null || val === undefined) ? '' : val;
             const isKeyColumn = keyColumns.includes(header);
@@ -442,13 +439,13 @@ function createTableHtml(records, headers, mode = 'default') {
             let style = '';
             let className = '';
             
-            const isSummaryRow = record.isSummary === true;
+            const isSummaryRow = record.isSummary === true; // 判斷是否為非最底層
 
             if (isKeyColumn) {
                 if (header !== '基金名稱' && indentLevel > 0) {
                     style = `padding-left: ${1 + indentLevel * 1.5}em;`;
                 }
-                if (isSummaryRow) { // 非最底層科目名稱加粗
+                if (isSummaryRow) {
                     displayVal = `<strong>${displayVal}</strong>`;
                 }
             } else {
@@ -458,7 +455,7 @@ function createTableHtml(records, headers, mode = 'default') {
                 if (isNumericField) {
                     const numVal = Number(rawVal);
                     displayVal = numVal.toLocaleString();
-                    if (isSummaryRow) { // 非最底層科目的數值加粗
+                    if (isSummaryRow) { // 只有非最底層的數值才加粗
                         displayVal = `<strong>${displayVal}</strong>`;
                     }
                     className = 'numeric-data';
