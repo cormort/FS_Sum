@@ -3,31 +3,59 @@
 import { FULL_CONFIG } from './config.js';
 import { findSheet, extractFundName, findHeaderRowIndex, getHeaderMapping } from './utils.js';
 
-// ★★★ 核心修正：專注於偵測「前置空白」的縮排函式 ★★★
-function getIndentLevelFromWhitespace(rawText) {
-    const text = String(rawText || '');
-    // 使用正規表示式匹配所有前置的半形(s)和全形(　)空白
-    const match = text.match(/^(\s|　)+/); 
-    if (!match) {
-        return 0; // 沒有前置空白，是第1級科目 (indent 0)
-    }
+// ★★★ 核心修改：專門為現金流量表添加後綴的輔助函式 ★★★
+function applyCashFlowSuffixes(records, keyColumn) {
+    const itemCounter = {
+        '收取利息': 0,
+        '收取股利': 0,
+        '支付利息': 0
+    };
+    const targetItems = Object.keys(itemCounter);
+    // 使用正規表示式移除括號內容和空白，以進行準確匹配
+    const normalize = (name) => String(name || '').replace(/\s|　/g, '').replace(/（.*）|\(.*\)/, '');
 
-    const leadingWhitespace = match[0];
-    let visualWidth = 0;
-    for (const char of leadingWhitespace) {
-        // 全形空白寬度約等於2個半形空白
-        visualWidth += (char === '　' ? 2 : 1);
-    }
-    
-    // 假設每2個半形空白的寬度，代表一級縮排
-    const indentUnit = 2; 
-    const indentLevel = Math.floor(visualWidth / indentUnit);
+    return records.map(record => {
+        const keyText = record[keyColumn] || '';
+        const normalizedKey = normalize(keyText);
 
-    return indentLevel;
+        if (targetItems.includes(normalizedKey)) {
+            itemCounter[normalizedKey]++;
+            const count = itemCounter[normalizedKey];
+            let suffix = '';
+
+            if (count === 2) { // 只處理第二次出現的項目
+                if (normalizedKey === '收取利息' || normalizedKey === '收取股利') {
+                    suffix = ' (投資活動)';
+                } else if (normalizedKey === '支付利息') {
+                    suffix = ' (籌資活動)';
+                }
+            }
+
+            if (suffix) {
+                // 回傳一個新物件，避免直接修改原始 record
+                return { ...record, [keyColumn]: keyText + suffix };
+            }
+        }
+        return record;
+    });
 }
 
 
-// --- 所有解析器均已更新，使用新的 getIndentLevelFromWhitespace 函式 ---
+function getIndentLevelFromWhitespace(rawText) {
+    const text = String(rawText || '');
+    const match = text.match(/^(\s|　)+/); 
+    if (!match) {
+        return 0; 
+    }
+    const leadingWhitespace = match[0];
+    let visualWidth = 0;
+    for (const char of leadingWhitespace) {
+        visualWidth += (char === '　' ? 2 : 1);
+    }
+    const indentUnit = 2; 
+    const indentLevel = Math.floor(visualWidth / indentUnit);
+    return indentLevel;
+}
 
 function _parseFixed(data, config, fundName, sheet, startRow, colMap) {
     const records = [];
@@ -139,8 +167,6 @@ function _parseSideBySide(data, config, fundName, sheet) {
     }
     return records;
 }
-
-// ... (其他解析函式保持不變，因為它們都依賴 _parseFixed 或 parseNormalTable) ...
 
 function parseBalanceSheet(data, fundName, sheet) {
     const assetConfig = { keyColumn: '科目', columns: ['科目', '本年度決算核定數', '上年度決算審定數', '比較增減'], subTableIdentifier: '資產' };
@@ -285,7 +311,7 @@ export function processFile(file, selectedFundType) {
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
-                const workbook = XLSX.read(e.target.result, { type: 'array' }); // cellStyles: false is safer now
+                const workbook = XLSX.read(e.target.result, { type: 'array' });
                 let fundName = extractFundName(workbook, selectedFundType) || file.name.replace(/\.xlsx?$/, '');
                 let extractedData = {};
                 const activeConfig = FULL_CONFIG[selectedFundType];
@@ -298,6 +324,12 @@ export function processFile(file, selectedFundType) {
                     const parserFunc = PARSERS[config.parser];
                     if (parserFunc) {
                         let records = parserFunc(data, config, fundName, sheet);
+                        
+                        // ★★★ 核心修改：在此處應用後綴 ★★★
+                        if (reportKey === '現金流量表' && selectedFundType === 'business' && records && records.length > 0) {
+                            records = applyCashFlowSuffixes(records, config.keyColumn);
+                        }
+
                         if (records) {
                             if (reportKey === '平衡表' || reportKey === '資產負債表') {
                                 for (const key in records) {
