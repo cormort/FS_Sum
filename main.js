@@ -218,7 +218,6 @@ function displayAggregated() {
                 }
             }
             if (!found) {
-                // 深拷貝節點以避免引用問題
                 const newNode = JSON.parse(JSON.stringify(sourceChild));
                 targetNode.children.push(newNode);
             }
@@ -228,17 +227,20 @@ function displayAggregated() {
     // --- 輔助函式：自底向上重新計算總和 ---
     function recalculateTotals(node, numericCols) {
         if (!node.children || node.children.length === 0) {
-            return; // 是葉節點，無需計算
+            return;
         }
         
         node.children.forEach(child => recalculateTotals(child, numericCols));
-
-        numericCols.forEach(col => {
-            node.data[col] = 0; // 清空父節點的值
-            node.children.forEach(child => {
-                node.data[col] += (child.data[col] || 0);
+        
+        const isSummaryNode = node.children.some(child => child.data[numericCols[0]] !== undefined);
+        if (isSummaryNode) {
+            numericCols.forEach(col => {
+                node.data[col] = 0;
+                node.children.forEach(child => {
+                    node.data[col] += (child.data[col] || 0);
+                });
             });
-        });
+        }
     }
     
     // --- 輔助函式：將樹扁平化為列表 ---
@@ -256,7 +258,6 @@ function displayAggregated() {
         node.children.forEach(child => flattenTree(child, result, keyColumn, numericCols));
     }
     
-    // --- 主邏輯開始 ---
     const summaryData = {};
     for (const reportKey in allExtractedData) {
         const sourceReportData = allExtractedData[reportKey];
@@ -269,27 +270,42 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
         
-        // 步驟一：為每個基金建立獨立的階層樹
+        // 步驟一：為每個基金建立獨立樹
         const fundTrees = fundNames.map(name => {
             const fundRecords = sourceReportData.filter(r => r['基金名稱'] === name);
             return buildTree(fundRecords, keyColumn, numericCols);
         });
 
-        // 步驟二：將所有基金樹合併為一個總帳樹
-        const summaryTree = new Node('Root', -1);
+        // 步驟二：合併為總帳樹
+        const summaryTree = buildTree([], keyColumn, numericCols); // 建立一個空的根
         fundTrees.forEach(tree => mergeTrees(summaryTree, tree, numericCols));
 
         // 步驟三：在總帳樹上應用例外規則
-        const mergeRules = { /* ... 規則內容與之前相同 ... */ };
+        const mergeRules = {
+            '損益表': [
+                { target: '採用權益法認列之關聯企業及合資利益之份額', sources: ['事業投資利益'], type: 'additive' },
+                { target: '採用權益法認列之關聯企業及合資損失之份額', sources: ['事業投資損失'], type: 'additive' }
+            ],
+            '資產負債表_資產': [
+                { target: '存放銀行同業', sources: ['存放銀行業'], type: 'additive' },
+                { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'], type: 'summary' },
+                { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'], type: 'additive' }
+            ],
+            '資產負債表_負債及權益': [
+                { target: '銀行同業存款', sources: ['銀行業存款'], type: 'additive' },
+                { target: '存款、匯款及金融債券', sources: ['存款'], type: 'additive' },
+                { target: '支票存款', sources: ['公庫及政府機關存款'], type: 'additive' },
+                { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'], type: 'additive' }
+            ]
+        };
         const activeMergeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : [];
         const sourceKeysToHide = new Set(activeMergeRules.flatMap(rule => rule.sources));
         const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
         
         activeMergeRules.forEach(rule => {
-             // 尋找目標節點
              function findNode(node, name) {
-                 if(node.name === name) return node;
                  for(const child of node.children) {
+                     if(child.name === name) return child;
                      const found = findNode(child, name);
                      if(found) return found;
                  }
@@ -298,7 +314,6 @@ function displayAggregated() {
              const targetNode = findNode(summaryTree, rule.target);
              if(!targetNode) return;
              
-             // 計算央行來源科目的總值
              const sourceValues = {};
              numericCols.forEach(col => sourceValues[col] = 0);
              rule.sources.forEach(sourceKey => {
@@ -329,7 +344,7 @@ function displayAggregated() {
              }
         });
         
-        // 步驟四：自底向上重新計算總和
+        // 步驟四：自底向上重新計算
         recalculateTotals(summaryTree, numericCols);
 
         // 步驟五：按公版順序生成最終報表
@@ -337,18 +352,26 @@ function displayAggregated() {
         flattenTree(summaryTree, flattenedData, keyColumn, numericCols);
 
         const finalRows = [];
-        const standardOrder = { /* ... 順序內容與之前相同 ... */ }[reportKey] || [];
+        const standardOrder = {
+             '損益表': PROFIT_LOSS_ACCOUNT_ORDER,
+             '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER,
+             '資產負債表_資產': PUBLIC_ASSET_ORDER,
+             '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER
+        }[reportKey] || [];
         
         standardOrder.forEach(accountName => {
             if (sourceKeysToHide.has(accountName)) return;
-            flattenedData.forEach(row => {
-                if (row[keyColumn] === accountName) {
+            // 確保同名但不同層級的科目都能被找到並按順序添加
+            const matchingRows = flattenedData.filter(row => row[keyColumn] === accountName);
+            if (matchingRows.length > 0) {
+                 matchingRows.sort((a,b) => a.indent_level - b.indent_level);
+                 matchingRows.forEach(row => {
                     if (selectedFundType === 'business') {
                         numericCols.forEach(col => row[col] = Math.round(row[col]));
                     }
                     finalRows.push(row);
-                }
-            });
+                 })
+            }
         });
         
         summaryData[reportKey] = finalRows;
@@ -644,4 +667,18 @@ function createGovernmentalYuchuSummaryTable(aggregatedData) {
             <tr>
                 <td>所有基金合計</td>
                 <td class="numeric-data">${findValue('基金來源', '預算數')}</td>
-                <td class.
+                <td class="numeric-data">${findValue('基金用途', '預算數')}</td>
+                <td class="numeric-data">${findValue('本期賸餘(短絀)', '預算數')}</td>
+                <td class="numeric-data">${findValue('基金來源', '決算核定數')}</td>
+                <td class="numeric-data">${findValue('基金用途', '決算核定數')}</td>
+                <td class="numeric-data">${findValue('本期賸餘(短絀)', '決算核定數')}</td>
+                <td class="numeric-data">${findValue('基金來源', '預算與決算核定數比較增減')}</td>
+                <td class="numeric-data">${findValue('基金用途', '預算與決算核定數比較增減')}</td>
+                <td class="numeric-data">${findValue('本期賸餘(短絀)', '預算與決算核定數比較增減')}</td>
+                <td class="numeric-data">${findValue('期初基金餘額', '決算核定數')}</td>
+                <td class="numeric-data">${findValue('本期繳庫數', '決算核定數')}</td>
+                <td class="numeric-data">${findValue('期末基金餘額', '決算核定數')}</td>
+            </tr>
+        </tbody></table>`;
+    return table;
+}
