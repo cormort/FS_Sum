@@ -3,15 +3,19 @@
 import { FULL_CONFIG } from './config.js';
 import { findSheet, extractFundName, findHeaderRowIndex, getHeaderMapping } from './utils.js';
 
-// ★★★ 核心修正：專注於讀取 Excel 原生樣式縮排 ★★★
+// ★★★ 核心修正：最終版，只專注於讀取 Excel 原生樣式縮排 ★★★
 function getIndentLevel(sheet, rowIndex, colIndex) {
     try {
         const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
-        // 直接讀取並返回 Excel 的內建樣式縮排值，如果不存在則為 0
-        return sheet[cellAddress]?.s?.alignment?.indent || 0;
+        // 直接讀取並返回 Excel 的內建樣式縮排值。如果不存在或為空，則返回 0。
+        const cell = sheet[cellAddress];
+        if (cell && cell.s && cell.s.alignment && cell.s.alignment.indent) {
+            return cell.s.alignment.indent;
+        }
+        return 0;
     } catch (e) {
         // 如果發生任何預期外的錯誤，安全地返回 0
-        console.warn(`無法讀取單元格樣式於 行:${rowIndex}, 列:${colIndex}.`, e);
+        console.warn(`無法讀取單元格樣式於 行:${rowIndex}, 列:${colIndex}.`);
         return 0;
     }
 }
@@ -33,13 +37,11 @@ function _parseFixed(data, config, fundName, sheet, startRow, colMap) {
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
         
-        // ★ 直接調用新的、專一的縮排函式
         record.indent_level = getIndentLevel(sheet, i, keyColIndex);
 
         config.columns.forEach(colName => {
             const colIndex = colMap[colName];
             const value = (colIndex !== undefined) ? row[colIndex] : '';
-            // 確保科目名稱是 trim 過的乾淨版本
             record[colName] = colName === config.keyColumn ? keyText : value; 
             if (colName !== config.keyColumn && value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
                 hasMeaningfulData = true;
