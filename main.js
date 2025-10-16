@@ -166,6 +166,7 @@ function displayIndividualFund() {
     initExportButtons();
 }
 
+// ★★★★★ 核心修改函式 ★★★★★
 function displayAggregated() {
     const summaryData = {};
 
@@ -218,40 +219,64 @@ function displayAggregated() {
                 });
             }
         });
-
+        
+        // 對營業基金的數值進行四捨五入
         if (selectedFundType === 'business') {
             dataMap.forEach(row => numericCols.forEach(col => row[col] = Math.round(row[col])));
             centralBankSourceMap.forEach(row => numericCols.forEach(col => row[col] = Math.round(row[col])));
         }
 
         // --- 步驟二：僅對營業基金報表應用"中央銀行"的例外規則 ---
-        const mergeRules = { /* 規則內容與您提供的一致 */ };
-        // (此處省略貼上您提供的完整規則，以節省篇幅，實際程式碼中應包含)
-        const activeMergeRules = mergeRules[reportKey] || [];
+        const mergeRules = {
+            '損益表': [
+                { target: '採用權益法認列之關聯企業及合資利益之份額', sources: ['事業投資利益'], type: 'additive' },
+                { target: '採用權益法認列之關聯企業及合資損失之份額', sources: ['事業投資損失'], type: 'additive' }
+            ],
+            '資產負債表_資產': [
+                { target: '存放銀行同業', sources: ['存放銀行業'], type: 'additive' },
+                { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'], type: 'summary' },
+                { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'], type: 'additive' }
+            ],
+            '資產負債表_負債及權益': [
+                { target: '銀行同業存款', sources: ['銀行業存款'], type: 'additive' },
+                { target: '存款、匯款及金融債券', sources: ['存款'], type: 'additive' },
+                { target: '支票存款', sources: ['公庫及政府機關存款'], type: 'additive' },
+                { target: '儲蓄存款', sources: ['儲蓄存款及儲蓄券'], type: 'additive' }
+            ]
+        };
+
+        const activeMergeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : [];
         const sourceKeysToHide = new Set();
 
         activeMergeRules.forEach(rule => {
-            // 尋找目標科目 (父科目，通常層級最低)
-            let targetRowInMainMap = [...dataMap.values()].find(r => r[keyColumn] === rule.target);
-            if (!targetRowInMainMap) return;
+            // 從 dataMap 中尋找目標科目 (父科目，通常層級最低)
+            let targetRowInMainMap = [...dataMap.values()]
+                .filter(r => r[keyColumn] === rule.target)
+                .sort((a,b) => a.indent_level - b.indent_level)[0];
 
-            // 對於彙總型，需要先扣除央行對目標科目的原始貢獻值，避免重複計算
+            if (!targetRowInMainMap) {
+                console.warn(`[Rule] Target account "${rule.target}" not found in main data map.`);
+                return;
+            }
+
+            // 對於「彙總型(summary)」，需要先扣除央行對目標科目的原始貢獻值，避免重複計算
             if (rule.type === 'summary') {
-                const cbTargetContribution = [...centralBankSourceMap.values()].find(r => r[keyColumn] === rule.target);
-                if (cbTargetContribution) {
-                    numericCols.forEach(col => {
-                        targetRowInMainMap[col] -= (cbTargetContribution[col] || 0);
-                    });
-                }
+                // 將目標科目清零，因為它的值將完全由來源科目構成
+                numericCols.forEach(col => { targetRowInMainMap[col] = 0; });
             }
             
-            // 將央行來源科目的值，加到目標科目上
+            // 將所有央行來源科目的值，加到目標科目上
             rule.sources.forEach(sourceKey => {
                 sourceKeysToHide.add(sourceKey); // 標記來源科目，以便從最終報表中隱藏
-                const sourceRowInCbMap = [...centralBankSourceMap.values()].find(r => r[keyColumn] === sourceKey);
-                if (sourceRowInCbMap) {
-                    numericCols.forEach(col => {
-                        targetRowInMainMap[col] += (sourceRowInCbMap[col] || 0);
+                
+                // 從央行獨立的帳本中尋找來源科目
+                const sourceRowsInCbMap = [...centralBankSourceMap.values()].filter(r => r[keyColumn] === sourceKey);
+                
+                if (sourceRowsInCbMap.length > 0) {
+                    sourceRowsInCbMap.forEach(sourceRow => {
+                        numericCols.forEach(col => {
+                            targetRowInMainMap[col] += (sourceRow[col] || 0);
+                        });
                     });
                 }
             });
@@ -269,22 +294,33 @@ function displayAggregated() {
         
         const allRows = Array.from(dataMap.values());
 
-        // 1. 按公版順序添加
-        standardOrder.forEach(accountName => {
+        // 3.1: 按公版順序添加科目
+        standardOrder.forEach((accountName, index) => {
             // 央行的特定來源科目不應獨立顯示
             if (sourceKeysToHide.has(accountName)) return;
 
-            const matchingRows = allRows.filter(r => r[keyColumn] === accountName)
-                                      .sort((a, b) => a.indent_level - b.indent_level);
+            // 尋找所有符合公版名稱的科目，並按層級排序
+            const matchingRows = allRows
+                .filter(r => r[keyColumn] === accountName)
+                .sort((a, b) => a.indent_level - b.indent_level);
             
-            matchingRows.forEach(row => {
+            matchingRows.forEach((row, subIndex) => {
                 const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-                finalRows.push(row);
+                
+                // 為了解決同名但不同層級的問題，我們給非第一個同名科目加上序號
+                if (matchingRows.length > 1 && subIndex > 0) {
+                    const newRow = {...row}; // 複製一份，避免修改原始 dataMap
+                    newRow[keyColumn] = `${row[keyColumn]} (${subIndex + 1})`;
+                    finalRows.push(newRow);
+                } else {
+                    finalRows.push(row);
+                }
+                
                 processedCompositeKeys.add(compositeKey);
             });
         });
 
-        // 2. 添加所有不在公版中的剩餘科目
+        // 3.2: 添加所有不在公版中的剩餘科目
         allRows.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
             if (!processedCompositeKeys.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
@@ -300,6 +336,7 @@ function displayAggregated() {
     initTabs();
     initExportButtons();
 }
+
 
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
