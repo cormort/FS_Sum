@@ -181,37 +181,33 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        // --- 步驟一：預先分析與分層加總 ---
-        // aggregatedMap 結構: Map<accountName, Map<indent, summaryRow>>
+        // --- 步驟一：無差別分層彙總 (建立基礎總帳) ---
+        // aggregatedMap 的 Key 為 "科目名稱::層級"，確保層級獨立
         const aggregatedMap = new Map();
         sourceReportData.forEach(row => {
             const keyText = row[keyColumn]?.trim();
             if (!keyText) return;
             const indent = row.indent_level || row.indent || 0;
+            const compositeKey = `${keyText}::${indent}`;
 
-            if (!aggregatedMap.has(keyText)) {
-                aggregatedMap.set(keyText, new Map());
-            }
-            const indentMap = aggregatedMap.get(keyText);
-
-            if (!indentMap.has(indent)) {
+            if (!aggregatedMap.has(compositeKey)) {
                 const newSummaryRow = {
                     [keyColumn]: keyText,
                     'indent_level': indent,
                     '基金名稱': '所有基金加總'
                 };
                 numericCols.forEach(col => newSummaryRow[col] = 0);
-                indentMap.set(indent, newSummaryRow);
+                aggregatedMap.set(compositeKey, newSummaryRow);
             }
             
-            const summaryRow = indentMap.get(indent);
+            const summaryRow = aggregatedMap.get(compositeKey);
             numericCols.forEach(col => {
                 const val = parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
                 summaryRow[col] += val;
             });
         });
 
-        // --- 步驟二：應用中央銀行例外規則 ---
+        // --- 步驟二：獨立應用中央銀行例外規則 ---
         const mergeRules = {
             '損益表': [
                 { target: '採用權益法認列之關聯企業及合資利益之份額', sources: ['事業投資利益'], type: 'additive' },
@@ -232,20 +228,20 @@ function displayAggregated() {
 
         const activeMergeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : [];
         const sourceKeysToHide = new Set(activeMergeRules.flatMap(rule => rule.sources));
-        
+        const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
+
         activeMergeRules.forEach(rule => {
             // 尋找目標科目 (通常是 indent level 最低的那個)
-            const targetIndentMap = aggregatedMap.get(rule.target);
-            if (!targetIndentMap || targetIndentMap.size === 0) return;
-            const minIndent = Math.min(...targetIndentMap.keys());
-            const targetRow = targetIndentMap.get(minIndent);
-            if (!targetRow) return;
+            const targetRows = [...aggregatedMap.keys()]
+                .filter(key => key.startsWith(`${rule.target}::`))
+                .map(key => aggregatedMap.get(key));
+            if (targetRows.length === 0) return;
+            const targetRow = targetRows.sort((a,b) => a.indent_level - b.indent_level)[0];
+            const targetCompositeKey = `${targetRow[keyColumn]}::${targetRow.indent_level}`;
 
             // 計算央行來源科目的總值
             const sourceValues = {};
             numericCols.forEach(col => sourceValues[col] = 0);
-            const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
-            
             rule.sources.forEach(sourceKey => {
                 centralBankData.forEach(row => {
                     if (row[keyColumn]?.trim() === sourceKey) {
@@ -260,23 +256,23 @@ function displayAggregated() {
             if (rule.type === 'additive') {
                 numericCols.forEach(col => targetRow[col] += sourceValues[col]);
             } else if (rule.type === 'summary') {
-                // 彙總型：先減去央行對目標科目的原始貢獻，再加上來源科目總和
-                 const centralBankTargetContribution = {};
-                 numericCols.forEach(col => centralBankTargetContribution[col] = 0);
-                 centralBankData.forEach(row => {
-                     if(row[keyColumn]?.trim() === rule.target) {
-                         numericCols.forEach(col => {
-                            centralBankTargetContribution[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
-                         });
-                     }
-                 });
-                 numericCols.forEach(col => {
-                     targetRow[col] = (targetRow[col] - centralBankTargetContribution[col]) + sourceValues[col];
-                 });
+                // 精確計算：總和 = (現有總和 - 央行對目標的貢獻) + 央行來源項目的總和
+                const cbTargetContribution = {};
+                numericCols.forEach(col => cbTargetContribution[col] = 0);
+                centralBankData.forEach(row => {
+                    if (row[keyColumn]?.trim() === rule.target && (row.indent_level || row.indent || 0) === targetRow.indent_level) {
+                        numericCols.forEach(col => {
+                           cbTargetContribution[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
+                        });
+                    }
+                });
+                numericCols.forEach(col => {
+                    targetRow[col] = targetRow[col] - cbTargetContribution[col] + sourceValues[col];
+                });
             }
         });
 
-        // --- 步驟三：按公版順序生成最終報表 ---
+        // --- 步驟三：按公版藍圖生成最終報表 ---
         const finalRows = [];
         const standardOrder = {
              '損益表': PROFIT_LOSS_ACCOUNT_ORDER,
@@ -288,17 +284,19 @@ function displayAggregated() {
         standardOrder.forEach(accountName => {
             if (sourceKeysToHide.has(accountName)) return;
 
-            const indentMap = aggregatedMap.get(accountName);
-            if (indentMap) {
-                const sortedIndents = [...indentMap.keys()].sort((a, b) => a - b);
-                sortedIndents.forEach(indent => {
-                    const finalRow = indentMap.get(indent);
-                    // 四捨五入
+            // 尋找所有符合公版名稱的層級
+            const matchingKeys = [...aggregatedMap.keys()].filter(key => key.startsWith(`${accountName}::`));
+            if (matchingKeys.length > 0) {
+                 const rowsForAccount = matchingKeys.map(key => aggregatedMap.get(key));
+                 // 按層級排序後加入
+                 rowsForAccount.sort((a, b) => a.indent_level - b.indent_level);
+                 rowsForAccount.forEach(row => {
+                     // 四捨五入
                     if (selectedFundType === 'business') {
-                        numericCols.forEach(col => finalRow[col] = Math.round(finalRow[col]));
+                        numericCols.forEach(col => row[col] = Math.round(row[col]));
                     }
-                    finalRows.push(finalRow);
-                });
+                    finalRows.push(row);
+                 })
             }
         });
 
