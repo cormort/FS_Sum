@@ -4,9 +4,11 @@ import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CA
 import { processFile } from './parsers.js';
 import { exportData } from './utils.js';
 
-// --- (公版順序樣板和全域變數定義保持不變) ---
+// --- 公版順序樣板 ---
 const PUBLIC_ASSET_ORDER = [ "資產", "流動資產", "現金", "存放銀行同業", "存放央行", "流動金融資產", "應收款項", "本期所得稅資產", "黃金與白銀", "存貨", "消耗性生物資產－流動", "生產性生物資產－流動", "預付款項", "短期墊款", "待出售非流動資產", "合約資產－流動", "其他流動資產", "押匯貼現及放款", "押匯及貼現", "短期放款及透支", "短期擔保放款及透支", "中期放款", "中期擔保放款", "長期放款", "長期擔保放款", "銀行業融通", "基金、投資及長期應收款", "基金", "非流動金融資產", "採用權益法之投資", "其他長期投資", "長期應收款項", "再保險準備資產", "合約資產－非流動", "不動產、廠房及設備", "土地", "土地改良物", "房屋及建築", "機械及設備", "交通及運輸設備", "什項設備", "租賃權益改良", "購建中固定資產", "核能燃料", "生產性植物", "使用權資產", "投資性不動產", "投資性不動產－土地", "投資性不動產－土地改良物", "投資性不動產－房屋及建築", "投資性不動產－租賃權益改良", "建造中之投資性不動產", "無形資產", "累計減損－無形資產", "生物資產", "消耗性生物資產－非流動", "生產性生物資產－非流動", "其他資產", "遞延資產", "遞延所得稅資產", "待整理資產", "什項資產", "合　　計" ];
 const PUBLIC_LIABILITY_ORDER = [ "負債", "流動負債", "短期債務", "央行存款", "銀行同業存款", "國際金融機構存款", "應付款項", "本期所得稅負債", "發行券幣", "預收款項", "流動金融負債", "與待出售處分群組直接相關之負債", "合約負債－流動", "其他流動負債", "存款、匯款及金融債券", "支票存款", "活期存款", "定期存款", "儲蓄存款", "匯款", "金融債券", "央行及同業融資", "央行融資", "同業融資", "長期負債", "長期債務", "租賃負債", "非流動金融負債", "其他負債", "負債準備", "遞延負債", "遞延所得稅負債", "待整理負債", "合約負債－非流動", "什項負債", "權益", "資本", "預收資本", "資本公積", "保留盈餘（或累積虧損）", "已指撥保留盈餘", "未指撥保留盈餘", "累積虧損", "累積其他綜合損益", "國外營運機構財務報表換算之兌換差額", "現金流量避險中屬有效避險部分之避險工具利益（損失）", "國外營運機構淨投資避險中屬有效避險部分之避險工具利益（損失）", "不動產重估增值", "與待出售非流動資產直接相關之權益", "確定福利計畫之再衡量數", "指定為透過損益按公允價值衡量之金融負債其變動金額來自信用風險", "透過其他綜合損益按公允價值衡量之金融資產損益", "採用覆蓋法重分類之其他綜合損益", "其他權益－其他", "庫藏股票", "首次採用國際財務報導準則調整數", "非控制權益", "合　　計" ];
+
+// --- Global Variables & UI Elements ---
 const dropZone = document.getElementById('drop-zone'), fileInput = document.getElementById('file-input'), statusDiv = document.getElementById('status'), outputContainer = document.getElementById('output-container'), controlsContainer = document.querySelector('.controls'), typeSelector = document.getElementById('type-selector'), mainContent = document.getElementById('main-content'), resetButton = document.getElementById('reset-button'), fundTypeDisplay = document.getElementById('current-fund-type-display');
 let allExtractedData = {}, fundNames = [], selectedFundType = null, fundFileMap = {};
 typeSelector.addEventListener('change', e => { if (e.target.name === 'fund-type') { selectedFundType = e.target.value; const labelText = document.querySelector(`label[for=${e.target.id}]`).textContent; fundTypeDisplay.textContent = `目前選擇：${labelText}`; mainContent.style.display = 'block'; typeSelector.style.display = 'none'; } });
@@ -136,11 +138,10 @@ function displayAggregated() {
         if (!config) continue;
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn && c !== '基金名稱');
-
-        // ★ 核心修改：回歸扁平化映射處理，並強化規則應用
-        const ledger = new Map();
+        
         const otherFundsData = sourceReportData.filter(r => r['基金名稱'] !== '中央銀行');
         const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
+        const ledger = new Map();
 
         // 1. 先加總所有「其他基金」
         otherFundsData.forEach(row => {
@@ -149,9 +150,7 @@ function displayAggregated() {
             const indent = row.indent_level || 0;
             const compositeKey = `${keyText}::${indent}`;
             if (!ledger.has(compositeKey)) {
-                const newRow = { [keyColumn]: keyText, 'indent_level': indent };
-                numericCols.forEach(col => newRow[col] = 0);
-                ledger.set(compositeKey, newRow);
+                ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
             const summaryRow = ledger.get(compositeKey);
             numericCols.forEach(col => {
@@ -162,42 +161,38 @@ function displayAggregated() {
         // 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
-            '資產負債表_資產': { '存放銀行業': '存放銀行同業', '融通': '押匯貼現及放款', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資' },
+            '資產負債表_資產': { '存放銀行業': '存放銀行同業', '融通': '押匯貼現及放款', '銀行業融通': '押匯貼現及放款', '押匯及貼現': '押匯貼現及放款', '短期放款及透支': '押匯貼現及放款', '短期擔保放款及透支': '押匯貼現及放款', '中期放款': '押匯貼現及放款', '中期擔保放款': '押匯貼現及放款', '長期放款': '押匯貼現及放款', '長期擔保放款': '押匯貼現及放款', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資' },
             '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
         };
+        const summaryRuleTargets = new Set(['押匯貼現及放款']);
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
-        
-        // 為了「彙總型」規則，先將對應的目標科目清零
-        const summaryRuleTargets = ['押匯貼現及放款'];
-        summaryRuleTargets.forEach(targetName => {
-            const targetKeys = [...ledger.keys()].filter(k => k.startsWith(`${targetName}::`));
-            targetKeys.forEach(key => {
-                const targetRow = ledger.get(key);
-                numericCols.forEach(col => targetRow[col] = 0);
-            });
-        });
 
+        // 彙總型規則：先將目標科目的「其他基金」總值清零
+        summaryRuleTargets.forEach(targetName => {
+             if (Object.values(activeRules).includes(targetName)) {
+                 const targetKeys = [...ledger.keys()].filter(k => k.startsWith(`${targetName}::`));
+                 targetKeys.forEach(key => {
+                     const targetRow = ledger.get(key);
+                     numericCols.forEach(col => targetRow[col] = 0);
+                 });
+             }
+        });
+        
         centralBankData.forEach(row => {
             let keyText = row[keyColumn]?.trim();
             if (!keyText) return;
             let indent = row.indent_level || 0;
-
-            // 檢查是否為來源科目
             if (sourceToTargetMap.has(keyText)) {
-                keyText = sourceToTargetMap.get(keyText);
-                // 找到目標科目的 indent
-                const targetKey = [...ledger.keys()].find(k => k.startsWith(`${keyText}::`));
-                if (targetKey) {
-                    indent = parseInt(targetKey.split('::')[1]);
-                }
+                const targetName = sourceToTargetMap.get(keyText);
+                const targetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`)) || `${targetName}::0`;
+                keyText = targetName;
+                indent = parseInt(targetKey.split('::')[1]);
             }
 
             const compositeKey = `${keyText}::${indent}`;
             if (!ledger.has(compositeKey)) {
-                const newRow = { [keyColumn]: keyText, 'indent_level': indent };
-                numericCols.forEach(col => newRow[col] = 0);
-                ledger.set(compositeKey, newRow);
+                ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
             const summaryRow = ledger.get(compositeKey);
             numericCols.forEach(col => {
@@ -205,13 +200,21 @@ function displayAggregated() {
             });
         });
 
-        // 3. 為最終列表建立階層並標記 isSummary
         const finalDataList = Array.from(ledger.values());
         const tempTree = buildTree(finalDataList, keyColumn, numericCols);
+        
+        function recalculateTree(node) {
+            if (!node.children || node.children.length === 0) return;
+            node.children.forEach(child => recalculateTree(child));
+             numericCols.forEach(col => {
+               node.data[col] = node.children.reduce((sum, child) => sum + (child.data[col] || 0), 0);
+            });
+        }
+        recalculateTree(tempTree);
+        
         const finalRowsWithHierarchy = [];
         flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
         
-        // 4. 按公版順序排序輸出
         const standardOrderMap = { '損益表': PROFIT_LOSS_ACCOUNT_ORDER, '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER, '現金流量表': CASH_FLOW_ACCOUNT_ORDER, '資產負債表_資產': PUBLIC_ASSET_ORDER, '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER };
         const order = standardOrderMap[reportKey] || [];
         const finalRows = [];
