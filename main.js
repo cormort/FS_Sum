@@ -145,7 +145,7 @@ function refreshView() {
     }
 }
 
-// --- 階層樹與格式化核心邏輯 ---
+// --- 階層樹與格式化核心邏輯 (輔助函式) ---
 
 class Node {
     constructor(name, indent, data = {}) {
@@ -163,14 +163,10 @@ function buildTree(records, keyColumn, numericCols) {
         const name = record[keyColumn]?.trim();
         if (!name) return;
         const indent = record.indent_level || 0;
-        const data = {};
+        const data = { '基金名稱': record['基金名稱'] };
         numericCols.forEach(col => {
             data[col] = parseFloat(String(record[col] || '0').replace(/,/g, '')) || 0;
         });
-        // 把基金名稱也存入 data，以便後續使用
-        if (record['基金名稱']) {
-            data['基金名稱'] = record['基金名稱'];
-        }
         const node = new Node(name, indent, data);
         while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
             stack.pop();
@@ -181,52 +177,19 @@ function buildTree(records, keyColumn, numericCols) {
     return root;
 }
 
-function mergeTrees(targetNode, sourceNode, numericCols) {
-    sourceNode.children.forEach(sourceChild => {
-        let found = false;
-        for (const targetChild of targetNode.children) {
-            if (targetChild.name === sourceChild.name && targetChild.indent === sourceChild.indent) {
-                numericCols.forEach(col => {
-                    targetChild.data[col] = (targetChild.data[col] || 0) + (sourceChild.data[col] || 0);
-                });
-                mergeTrees(targetChild, sourceChild, numericCols);
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            targetNode.children.push(JSON.parse(JSON.stringify(sourceChild)));
-        }
-    });
-}
-
-function recalculateTotals(node, numericCols) {
-    if (!node.children || node.children.length === 0) return;
-    node.children.forEach(child => recalculateTotals(child, numericCols));
-    const isSummaryNode = node.children.some(child => child.data[numericCols[0]] !== undefined);
-    if (isSummaryNode) {
-        numericCols.forEach(col => {
-            node.data[col] = 0;
-            node.children.forEach(child => {
-                node.data[col] += (child.data[col] || 0);
-            });
-        });
-    }
-}
-
-function flattenTree(node, result, keyColumn, numericCols) {
+function flattenTree(node, result, keyColumn) {
     if (node.name !== 'Root') {
         const row = {
-            ...node.data, // ★ 核心修改：將節點的所有 data (包含基金名稱) 展開到 row 中
+            ...node.data,
             [keyColumn]: node.name,
             'indent_level': node.indent,
             'isSummary': node.children.length > 0
         };
-        // numericCols.forEach(col => { row[col] = node.data[col] || 0; });
         result.push(row);
     }
-    node.children.forEach(child => flattenTree(child, result, keyColumn, numericCols));
+    node.children.forEach(child => flattenTree(child, result, keyColumn));
 }
+
 
 // --- 顯示模式切換函式 ---
 
@@ -246,7 +209,7 @@ function displayIndividualFund(e) {
                 const numericCols = config.columns.filter(c => c !== keyColumn && c !== '基金名稱');
                 const tree = buildTree(fundRecords, keyColumn, numericCols);
                 const flattened = [];
-                flattenTree(tree, flattened, keyColumn, numericCols);
+                flattenTree(tree, flattened, keyColumn);
                 fundData[reportKey] = flattened;
             }
         }
@@ -268,16 +231,28 @@ function displayAggregated() {
         
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn && c !== '基金名稱');
-        
-        const fundTrees = fundNames.map(name => {
-            const fundRecords = sourceReportData.filter(r => r['基金名稱'] === name);
-            return buildTree(fundRecords, keyColumn, numericCols);
+
+        // 步驟一: 建立基礎總帳 (Flat Map)
+        const baseLedger = new Map();
+        sourceReportData.forEach(row => {
+            const keyText = row[keyColumn]?.trim();
+            if (!keyText) return;
+            const indent = row.indent_level || 0;
+            const compositeKey = `${keyText}::${indent}`;
+
+            if (!baseLedger.has(compositeKey)) {
+                const newSummaryRow = { [keyColumn]: keyText, 'indent_level': indent };
+                numericCols.forEach(col => newSummaryRow[col] = 0);
+                baseLedger.set(compositeKey, newSummaryRow);
+            }
+            const summaryRow = baseLedger.get(compositeKey);
+            numericCols.forEach(col => {
+                summaryRow[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
+            });
         });
-
-        const summaryTree = buildTree([], keyColumn, numericCols);
-        fundTrees.forEach(tree => mergeTrees(summaryTree, tree, numericCols));
-        summaryTree.data['基金名稱'] = '所有基金加總';
-
+        
+        // 步驟二: 應用例外規則
+        const adjustedLedger = new Map(JSON.parse(JSON.stringify(Array.from(baseLedger))));
         const mergeRules = {
             '損益表': [ { target: '採用權益法認列之關聯企業及合資利益之份額', sources: ['事業投資利益'], type: 'additive' }, { target: '採用權益法認列之關聯企業及合資損失之份額', sources: ['事業投資損失'], type: 'additive' } ],
             '資產負債表_資產': [ { target: '存放銀行同業', sources: ['存放銀行業'], type: 'additive' }, { target: '押匯貼現及放款', sources: ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'], type: 'summary' }, { target: '採用權益法之投資', sources: ['事業投資', '其他長期投資'], type: 'additive' } ],
@@ -288,17 +263,12 @@ function displayAggregated() {
         const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
         
         activeMergeRules.forEach(rule => {
-             function findNode(node, name) {
-                 for(const child of node.children) {
-                     if(child.name === name) return child;
-                     const found = findNode(child, name);
-                     if(found) return found;
-                 }
-                 return null;
-             }
-             const targetNode = findNode(summaryTree, rule.target);
-             if(!targetNode) return;
-             
+             const targetKeys = [...adjustedLedger.keys()].filter(k => k.startsWith(`${rule.target}::`));
+             if (targetKeys.length === 0) return;
+             const targetKey = targetKeys.sort((a,b) => a.split('::')[1] - b.split('::')[1])[0];
+             const targetRow = adjustedLedger.get(targetKey);
+             if (!targetRow) return;
+
              const sourceValues = {};
              numericCols.forEach(col => sourceValues[col] = 0);
              rule.sources.forEach(sourceKey => {
@@ -312,28 +282,41 @@ function displayAggregated() {
              });
              
              if (rule.type === 'additive') {
-                 numericCols.forEach(col => targetNode.data[col] += sourceValues[col]);
+                 numericCols.forEach(col => targetRow[col] += sourceValues[col]);
              } else if (rule.type === 'summary') {
+                 const originalTargetRow = baseLedger.get(targetKey);
+                 if (!originalTargetRow) return;
+
                  const cbTargetContribution = {};
                  numericCols.forEach(col => cbTargetContribution[col] = 0);
                  centralBankData.forEach(row => {
-                     if (row[keyColumn]?.trim() === rule.target && (row.indent_level || 0) === targetNode.indent) {
+                     if (row[keyColumn]?.trim() === rule.target && (row.indent_level || 0) === targetRow.indent_level) {
                           numericCols.forEach(col => {
                             cbTargetContribution[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
                           });
                      }
                  });
                  numericCols.forEach(col => {
-                    targetNode.data[col] = (targetNode.data[col] - cbTargetContribution[col]) + sourceValues[col];
+                    targetRow[col] = (originalTargetRow[col] - cbTargetContribution[col]) + sourceValues[col];
                  });
              }
         });
+
+        // 步驟三: 建立有層級的最終列表以判斷 isSummary
+        const finalRowsWithHierarchy = [];
+        const tempTree = buildTree(Array.from(adjustedLedger.values()), keyColumn, numericCols);
         
-        recalculateTotals(summaryTree, numericCols);
-
-        const flattenedData = [];
-        flattenTree(summaryTree, flattenedData, keyColumn, numericCols);
-
+        function recalculateTree(node) {
+            if (!node.children || node.children.length === 0) return;
+            node.children.forEach(child => recalculateTree(child));
+             numericCols.forEach(col => {
+                node.data[col] = node.children.reduce((sum, child) => sum + (child.data[col] || 0), 0);
+            });
+        }
+        recalculateTree(tempTree);
+        flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
+        
+        // 步驟四: 按公版順序排序
         const standardOrderMap = {
              '損益表': PROFIT_LOSS_ACCOUNT_ORDER,
              '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER,
@@ -342,34 +325,22 @@ function displayAggregated() {
              '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER
         };
         const order = standardOrderMap[reportKey] || [];
-        
         const finalRows = [];
         const processedItems = new Set();
-
+        
         order.forEach(accountName => {
             if (sourceKeysToHide.has(accountName)) return;
-            const matchingRows = flattenedData.filter(row => row[keyColumn] === accountName);
+            const matchingRows = finalRowsWithHierarchy.filter(row => row[keyColumn] === accountName);
             if (matchingRows.length > 0) {
                  matchingRows.sort((a,b) => a.indent_level - b.indent_level);
                  matchingRows.forEach(row => {
-                    row['基金名稱'] = '所有基金加總'; // 確保加總模式下有名稱
+                    row['基金名稱'] = '所有基金加總';
                     if (selectedFundType === 'business') {
                         numericCols.forEach(col => row[col] = Math.round(row[col]));
                     }
                     finalRows.push(row);
                     processedItems.add(`${row[keyColumn]}::${row.indent_level}`);
                  })
-            }
-        });
-        
-        flattenedData.forEach(row => {
-            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            if (!processedItems.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
-                 row['基金名稱'] = '所有基金加總';
-                 if (selectedFundType === 'business') {
-                    numericCols.forEach(col => row[col] = Math.round(row[col]));
-                }
-                finalRows.push(row);
             }
         });
         
@@ -380,7 +351,81 @@ function displayAggregated() {
     initExportButtons();
 }
 
-function displayComparison() { /* ... 此函式保持不變 ... */ }
+function displayComparison() {
+    const dynamicControlsContainer = document.getElementById('dynamic-controls');
+    let optionsHtml = '';
+    const activeConfig = FULL_CONFIG[selectedFundType];
+    const reportKeysInData = Object.keys(allExtractedData).sort();
+
+    reportKeysInData.forEach(reportKey => {
+        if (!allExtractedData[reportKey] || allExtractedData[reportKey].length === 0) return;
+        const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
+        const config = activeConfig[baseKey];
+        if (!config || !config.keyColumn) return;
+
+        const keyColumn = config.keyColumn;
+        const items = [...new Set(allExtractedData[reportKey].map(r => r[keyColumn]))].filter(Boolean).sort((a,b) => a.localeCompare(b, 'zh-Hant'));
+        const tabName = reportKey.replace(/_/g, ' ');
+
+        if (items.length > 0) {
+            optionsHtml += `<optgroup label="${tabName}">${items.map(item => `<option value="${reportKey}::${item}">${item}</option>`).join('')}</optgroup>`;
+        }
+    });
+
+    dynamicControlsContainer.innerHTML = `<div class="control-group"><label for="item-select">選擇比較項目：</label><select id="item-select">${optionsHtml}</select></div>`;
+    const itemSelect = document.getElementById('item-select');
+    
+    const updateComparisonView = () => {
+        const selectedItem = itemSelect?.value;
+        if (!selectedItem) {
+            outputContainer.innerHTML = '';
+            return;
+        };
+        const [reportKey, itemName] = selectedItem.split('::');
+        const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
+        const config = FULL_CONFIG[selectedFundType][baseKey];
+        const keyColumn = config.keyColumn;
+        const columns = config.columns;
+        const dataForCompare = allExtractedData[reportKey].filter(r => r[keyColumn] === itemName);
+        const finalData = { [reportKey]: [] };
+        
+        const totals = {};
+        const numericHeaders = columns.filter(c => c !== keyColumn && c !== '基金名稱');
+        numericHeaders.forEach(h => totals[h] = 0);
+
+        fundNames.forEach(fund => {
+            const fundRow = dataForCompare.find(r => r['基金名稱'] === fund);
+            const newRow = { '基金名稱': fund };
+            columns.forEach(col => {
+                if (col !== keyColumn) {
+                    const val = fundRow ? fundRow[col] : '-';
+                    newRow[col] = val;
+                    const numVal = parseFloat(String(val).replace(/,/g, '')) || 0;
+                    if (totals[col] !== undefined) {
+                        totals[col] += numVal;
+                    }
+                }
+            });
+            finalData[reportKey].push(newRow);
+        });
+
+        const totalRow = { '基金名稱': `${itemName}合計` };
+        Object.assign(totalRow, totals);
+        finalData[reportKey].unshift(totalRow);
+
+        const headers = ['基金名稱', ...columns.filter(c => c !== keyColumn)];
+        outputContainer.innerHTML = createTabsAndTables(finalData, { [reportKey]: headers }, 'comparison');
+        initTabs();
+        initSortableTables();
+        initExportButtons();
+    };
+
+    itemSelect.addEventListener('change', updateComparisonView);
+    if (itemSelect.options.length > 0) {
+        updateComparisonView();
+    }
+}
+
 
 // --- HTML渲染與UI互動函式 ---
 
@@ -389,18 +434,10 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     let contentHtml = '';
     let isFirst = true;
     const activeConfig = FULL_CONFIG[selectedFundType];
-    const reportKeysInOrder = Object.keys(activeConfig);
-    const allPossibleKeys = [];
-    reportKeysInOrder.forEach(k => {
-        if (k === '平衡表' || k === '資產負債表') {
-            allPossibleKeys.push(k + '_資產', k + '_負債及權益');
-        } else {
-            allPossibleKeys.push(k);
-        }
-    });
-
-    const dataKeys = Object.keys(data).filter(key => data[key] && data[key].length > 0);
-    const orderedDataKeys = allPossibleKeys.filter(k => dataKeys.includes(k));
+    const allPossibleKeys = Object.keys(activeConfig).flatMap(k => 
+        (k === '平衡表' || k === '資產負債表') ? [`${k}_資產`, `${k}_負債及權益`] : [k]
+    );
+    const orderedDataKeys = allPossibleKeys.filter(key => data[key] && data[key].length > 0);
 
     orderedDataKeys.forEach(reportKey => {
         const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
@@ -430,7 +467,6 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
     return tabsHtml + contentHtml;
 }
 
-// ★★★ 核心修改：修正加粗邏輯和欄位偏移問題 ★★★
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目', '基金名稱']; 
@@ -458,7 +494,7 @@ function createTableHtml(records, headers, mode = 'default') {
                 }
             } else {
                 const rawVal = String(val).replace(/,/g, '');
-                const isNumericField = val != null && val !== '' && !isNaN(Number(rawVal)) && isFinite(Number(rawVal));
+                const isNumericField = !isNaN(parseFloat(rawVal)) && isFinite(rawVal) && rawVal.trim() !== '';
                 
                 if (isNumericField) {
                     const numVal = Number(rawVal);
@@ -501,7 +537,31 @@ function initTabs() {
     }
 }
 
-function initSortableTables() { /* Can be implemented if needed */ }
+function initSortableTables() {
+    document.querySelectorAll('.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+            const table = th.closest('table');
+            const tbody = table.querySelector('tbody');
+            const headerIndex = Array.from(th.parentNode.children).indexOf(th);
+            const currentIsDesc = th.classList.contains('sort-desc');
+            table.querySelectorAll('th').forEach(h => {
+                h.classList.remove('sort-asc', 'sort-desc');
+                h.querySelector('.sort-arrow')?.remove();
+            });
+            const direction = currentIsDesc ? 'asc' : 'desc';
+            th.classList.add(direction === 'asc' ? 'sort-asc' : 'sort-desc');
+            th.innerHTML += `<span class="sort-arrow">${direction === 'asc' ? '▲' : '▼'}</span>`;
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            const headerRow = rows.shift();
+            rows.sort((a, b) => {
+                const aVal = parseFloat(String(a.children[headerIndex].textContent).replace(/,/g, '')) || Number.NEGATIVE_INFINITY;
+                const bVal = parseFloat(String(b.children[headerIndex].textContent).replace(/,/g, '')) || Number.NEGATIVE_INFINITY;
+                return direction === 'asc' ? aVal - bVal : bVal - aVal;
+            }).forEach(row => tbody.appendChild(row));
+            tbody.insertBefore(headerRow, tbody.firstChild);
+        });
+    });
+}
 
 function initExportButtons() {
     document.querySelectorAll('.export-btn').forEach(button => {
@@ -514,5 +574,5 @@ function initExportButtons() {
 }
 
 function createGovernmentalYuchuSummaryTable(aggregatedData) {
-    // This function remains unchanged 
+    // This function can be filled in if governmental funds are used
 }
