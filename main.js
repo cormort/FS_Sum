@@ -167,6 +167,7 @@ function displayIndividualFund() {
 }
 
 // ★★★★★ 核心修改函式 ★★★★★
+// 把整個 displayAggregated 函式替換為下面版本
 function displayAggregated() {
     const summaryData = {};
 
@@ -185,7 +186,7 @@ function displayAggregated() {
         // Key: "科目名稱::層級", Value: summaryRow object
         const baseLedger = new Map();
         sourceReportData.forEach(row => {
-            const keyText = row[keyColumn]?.trim();
+            const keyText = (row[keyColumn] || '').trim();
             if (!keyText) return;
             const indent = row.indent_level || row.indent || 0;
             const compositeKey = `${keyText}::${indent}`;
@@ -195,7 +196,7 @@ function displayAggregated() {
                 numericCols.forEach(col => newSummaryRow[col] = 0);
                 baseLedger.set(compositeKey, newSummaryRow);
             }
-            
+
             const summaryRow = baseLedger.get(compositeKey);
             numericCols.forEach(col => {
                 const val = parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
@@ -204,7 +205,10 @@ function displayAggregated() {
         });
 
         // --- 步驟二：建立「調整後帳本」並應用例外規則 ---
+        // 深拷貝 baseLedger 到 adjustedLedger
         const adjustedLedger = new Map(JSON.parse(JSON.stringify(Array.from(baseLedger))));
+
+        // merge 規則定義（保留你原有的規則）
         const mergeRules = {
             '損益表': [
                 { target: '採用權益法認列之關聯企業及合資利益之份額', sources: ['事業投資利益'], type: 'additive' },
@@ -223,49 +227,115 @@ function displayAggregated() {
             ]
         };
         const activeMergeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : [];
+        // 將所有來源名稱放到一個集合用來後續從 adjustedLedger 移除
         const sourceKeysToHide = new Set(activeMergeRules.flatMap(rule => rule.sources));
+
+        // 中央銀行的資料（原始 rows）
         const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
 
+        // 幫手：把指定名稱的 central-bank 數值加總起來（會使用原始 centralBankData）
+        const sumCentralBankValuesFor = (name) => {
+            const totals = {};
+            numericCols.forEach(col => totals[col] = 0);
+            centralBankData.forEach(row => {
+                if (String(row[keyColumn]).trim() === name) {
+                    numericCols.forEach(col => totals[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0);
+                }
+            });
+            return totals;
+        };
+
+        // 應用每一條 rule
         activeMergeRules.forEach(rule => {
-            // 尋找目標科目 (通常 indent level 最低)
+            // 找目標（選最淺 indent 的那一筆）
             const targetKeys = [...adjustedLedger.keys()].filter(k => k.startsWith(`${rule.target}::`));
             if (targetKeys.length === 0) return;
-            const targetKey = targetKeys.sort((a,b) => a.split('::')[1] - b.split('::')[1])[0];
+            const targetKey = targetKeys.sort((a, b) => Number(a.split('::')[1]) - Number(b.split('::')[1]))[0];
             const targetRow = adjustedLedger.get(targetKey);
-            
-            // 計算央行來源科目的總值
+
+            // 計算來源總值（只從中央銀行那邊抓）
             const sourceValues = {};
             numericCols.forEach(col => sourceValues[col] = 0);
             rule.sources.forEach(sourceKey => {
-                centralBankData.forEach(row => {
-                    if (row[keyColumn]?.trim() === sourceKey) {
-                        numericCols.forEach(col => {
-                            sourceValues[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
-                        });
-                    }
-                });
+                const svals = sumCentralBankValuesFor(sourceKey);
+                numericCols.forEach(col => sourceValues[col] += svals[col]);
             });
 
             if (rule.type === 'additive') {
                 numericCols.forEach(col => targetRow[col] += sourceValues[col]);
             } else if (rule.type === 'summary') {
+                // 先試著找與 targetRow 同 indent 的中央銀行貢獻，若找不到則退回 sumCentralBankValuesFor(rule.target)
                 const cbTargetContribution = {};
                 numericCols.forEach(col => cbTargetContribution[col] = 0);
                 centralBankData.forEach(row => {
                     const indent = row.indent_level || row.indent || 0;
-                    if (row[keyColumn]?.trim() === rule.target && indent === targetRow.indent_level) {
-                         numericCols.forEach(col => {
-                           cbTargetContribution[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
-                        });
+                    if (String(row[keyColumn]).trim() === rule.target && indent === targetRow.indent_level) {
+                        numericCols.forEach(col => cbTargetContribution[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0);
                     }
                 });
-                
-                // 讀取基礎總帳的原始值進行計算
-                const originalTargetRow = baseLedger.get(targetKey);
+                // fallback
+                const hasSameIndent = Object.values(cbTargetContribution).some(v => v !== 0);
+                if (!hasSameIndent) {
+                    const fallback = sumCentralBankValuesFor(rule.target);
+                    numericCols.forEach(col => cbTargetContribution[col] = fallback[col]);
+                }
+
+                // 從原始 baseLedger 的 targetRow 取原始值（若存在）
+                const originalTargetRow = baseLedger.get(targetKey) || {};
                 numericCols.forEach(col => {
-                    targetRow[col] = (originalTargetRow[col] - cbTargetContribution[col]) + sourceValues[col];
+                    const orig = originalTargetRow[col] || 0;
+                    targetRow[col] = (orig - (cbTargetContribution[col] || 0)) + (sourceValues[col] || 0);
                 });
             }
+
+            // 將那些「來源科目」從 adjustedLedger 中移除（避免之後再次輸出）
+            rule.sources.forEach(src => {
+                const keysToRemove = [...adjustedLedger.keys()].filter(k => k.startsWith(`${src}::`));
+                keysToRemove.forEach(k => adjustedLedger.delete(k));
+            });
+        });
+
+        // --- 新增步驟：collapseHierarchy --- 
+        // 解決「父子同名重複出現」導致的雙重加總問題
+        const collapseHierarchy = (ledgerMap) => {
+            // 建立 name -> [keys]
+            const nameMap = new Map();
+            for (const key of ledgerMap.keys()) {
+                const [name, indentStr] = key.split('::');
+                const indent = Number(indentStr);
+                if (!nameMap.has(name)) nameMap.set(name, []);
+                nameMap.get(name).push({ key, indent });
+            }
+
+            // 對每個同名群組，若有多筆（不同 indent），把 deeper 的全部合併到最淺的那一筆，並刪除 deeper
+            nameMap.forEach((entries, name) => {
+                if (entries.length <= 1) return;
+                entries.sort((a, b) => a.indent - b.indent); // 最淺在前
+                const parentKey = entries[0].key;
+                const parentRow = ledgerMap.get(parentKey);
+                if (!parentRow) return;
+                // 從第二筆開始全部合併到 parent
+                for (let i = 1; i < entries.length; i++) {
+                    const childKey = entries[i].key;
+                    const childRow = ledgerMap.get(childKey);
+                    if (!childRow) continue;
+                    numericCols.forEach(col => {
+                        parentRow[col] = (parentRow[col] || 0) + (childRow[col] || 0);
+                    });
+                    // 刪除 child entry
+                    ledgerMap.delete(childKey);
+                }
+                // 更新 parentRow（已直接修改）
+                ledgerMap.set(parentKey, parentRow);
+            });
+        };
+
+        collapseHierarchy(adjustedLedger);
+
+        // 最後，確保任何 sourceKeysToHide 的名稱在 adjustedLedger 中不會出現（再做一次清理）
+        sourceKeysToHide.forEach(src => {
+            const removes = [...adjustedLedger.keys()].filter(k => k.startsWith(`${src}::`));
+            removes.forEach(k => adjustedLedger.delete(k));
         });
 
         // --- 步驟三：按「公版藍圖」生成最終報表 ---
@@ -276,13 +346,14 @@ function displayAggregated() {
              '資產負債表_資產': PUBLIC_ASSET_ORDER,
              '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER
         }[reportKey] || [];
-        
+
         standardOrder.forEach(accountName => {
+            // 如果被標記要隱藏（來源科目），跳過
             if (sourceKeysToHide.has(accountName)) return;
 
             const matchingKeys = [...adjustedLedger.keys()].filter(key => key.startsWith(`${accountName}::`));
             if (matchingKeys.length > 0) {
-                 matchingKeys.sort((a, b) => a.split('::')[1] - b.split('::')[1]);
+                 matchingKeys.sort((a, b) => Number(a.split('::')[1]) - Number(b.split('::')[1]));
                  matchingKeys.forEach(key => {
                      const row = adjustedLedger.get(key);
                      if (selectedFundType === 'business') {
@@ -300,6 +371,7 @@ function displayAggregated() {
     initTabs();
     initExportButtons();
 }
+
 
 
 function displayComparison() {
