@@ -3,36 +3,42 @@
 import { FULL_CONFIG } from './config.js';
 import { findSheet, extractFundName, findHeaderRowIndex, getHeaderMapping } from './utils.js';
 
-// ★★★ 核心修正：更強健的縮排偵測函式 ★★★
-function getRobustIndentLevel(row, rowIndex, colIndex, sheet) {
-    let styleIndent = 0;
-    let spaceIndent = 0;
-
-    // 方法一：嘗試讀取 Excel 樣式縮排
+// ★★★ 核心修正：最終版、強健的縮排偵測函式 ★★★
+function getRobustIndentLevel(rawText, rowIndex, colIndex, sheet) {
+    // 方法一：優先嘗試讀取 Excel 的原生樣式縮排
     try {
         const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
         if (sheet[cellAddress]?.s?.alignment?.indent) {
-            styleIndent = sheet[cellAddress].s.alignment.indent;
+            return sheet[cellAddress].s.alignment.indent;
         }
     } catch (e) {
         // 忽略讀取樣式時可能發生的錯誤
     }
 
-    // 方法二：計算前置空白字元縮排
-    const keyText = String(row[colIndex] || '');
-    const leadingSpaces = keyText.length - keyText.trimStart().length;
-    
-    // 經驗法則：通常2個空白為一個縮排層級
-    if (leadingSpaces > 0) {
-         spaceIndent = Math.floor(leadingSpaces / 2); 
+    // 方法二：如果沒有樣式，則計算前置空白的「視覺寬度」
+    const text = String(rawText || '');
+    const match = text.match(/^(\s|　)+/); // 匹配所有半形(s)和全形(　)空白
+    if (!match) {
+        return 0; // 沒有前置空白，第1級科目，縮排為0
+    }
+
+    const leadingWhitespace = match[0];
+    let visualWidth = 0;
+    for (const char of leadingWhitespace) {
+        // 全形空白的視覺寬度約等於2個半形空白
+        visualWidth += (char === '　' ? 2 : 1);
     }
     
-    // 返回兩種方法中較大的值，確保能捕捉到任何一種縮排
-    return Math.max(styleIndent, spaceIndent);
+    // 根據您的規則：縮排1是第2級，縮排2是第3級...
+    // 這意味著我們需要一個基準單位，通常是2個半形空白的寬度
+    const indentUnit = 2; 
+    const indentLevel = Math.floor(visualWidth / indentUnit);
+
+    return indentLevel;
 }
 
+// --- 通用解析器，已全部更新使用新的縮排偵測 ---
 
-// --- Generic Parsers ---
 function _parseFixed(data, config, fundName, sheet, startRow, colMap) {
     const records = [];
     for (let i = startRow; i < data.length; i++) {
@@ -41,14 +47,14 @@ function _parseFixed(data, config, fundName, sheet, startRow, colMap) {
         const keyColIndex = colMap[config.keyColumn];
         if (keyColIndex === undefined) continue;
 
-        const keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
         
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
         
-        // 使用新的縮排偵測函式
-        record.indent_level = getRobustIndentLevel(row, i, keyColIndex, sheet);
+        record.indent_level = getRobustIndentLevel(keyTextRaw, i, keyColIndex, sheet);
 
         config.columns.forEach(colName => {
             const colIndex = colMap[colName];
@@ -78,14 +84,14 @@ function parseNormalTable(data, config, fundName, sheet) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
         
-        const keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
 
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
         
-        // 使用新的縮排偵測函式
-        record.indent_level = getRobustIndentLevel(row, i, keyColIndex, sheet);
+        record.indent_level = getRobustIndentLevel(keyTextRaw, i, keyColIndex, sheet);
         
         for (const colName in headerMapping) {
             const value = row[headerMapping[colName]];
@@ -124,14 +130,15 @@ function _parseSideBySide(data, config, fundName, sheet) {
     for (let i = dataStartRowIndex; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
-        const keyText = String(row[keyColIndex] || '').trim();
+
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
 
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
 
-        // 使用新的縮排偵測函式
-        record.indent_level = getRobustIndentLevel(row, i, keyColIndex, sheet);
+        record.indent_level = getRobustIndentLevel(keyTextRaw, i, keyColIndex, sheet);
         
         for (const colName in headerMapping) {
             const value = row[headerMapping[colName]];
@@ -177,7 +184,8 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
     for (let i = 6; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
-        let keyTextRaw = String(row[keyColIndex] || '');
+        
+        const keyTextRaw = String(row[keyColIndex] || '');
         let keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
 
@@ -196,16 +204,14 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
         
         numericCols.forEach(colName => {
             const colIndex = colMap[colName];
-            if (colIndex !== undefined) {
-                const value = row[colIndex];
-                record[colName] = value;
-                if (value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
-                    hasMeaningfulData = true;
-                }
+            const value = (colIndex !== undefined) ? row[colIndex] : '';
+            record[colName] = value;
+            if (value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
+                hasMeaningfulData = true;
             }
         });
         
-        record.indent_level = getRobustIndentLevel(row, i, keyColIndex, sheet);
+        record.indent_level = getRobustIndentLevel(keyTextRaw, i, keyColIndex, sheet);
         
         if (hasMeaningfulData || keyText) {
             records.push(record);
@@ -225,7 +231,8 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     for (let i = 6; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
-        let keyTextRaw = String(row[keyColIndex] || '');
+        
+        const keyTextRaw = String(row[keyColIndex] || '');
         let keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
 
@@ -241,16 +248,14 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
 
         numericCols.forEach(colName => {
             const colIndex = colMap[colName];
-            if (colIndex !== undefined) {
-                const value = row[colIndex];
-                record[colName] = value;
-                if (value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
-                    hasMeaningfulData = true;
-                }
+            const value = (colIndex !== undefined) ? row[colIndex] : '';
+            record[colName] = value;
+            if (value != null && value !== '' && !isNaN(parseFloat(String(value).replace(/,/g, '')))) {
+                hasMeaningfulData = true;
             }
         });
 
-        record.indent_level = getRobustIndentLevel(row, i, keyColIndex, sheet);
+        record.indent_level = getRobustIndentLevel(keyTextRaw, i, keyColIndex, sheet);
 
         if (hasMeaningfulData || keyText) {
             records.push(record);
@@ -269,7 +274,8 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
 
-        const keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
 
         const record = { '基金名稱': fundName };
@@ -284,7 +290,7 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
             }
         });
         
-        record.indent_level = getRobustIndentLevel(row, i, keyColIndex, sheet);
+        record.indent_level = getRobustIndentLevel(keyTextRaw, i, keyColIndex, sheet);
 
         if (hasMeaningfulData || keyText) {
             records.push(record);
