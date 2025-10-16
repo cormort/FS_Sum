@@ -180,10 +180,8 @@ function displayAggregated() {
         const keyColumn = config.keyColumn;
         const numericCols = config.columns.filter(c => c !== keyColumn);
 
-        // --- 步驟一：無差別加總所有基金，建立"基礎總帳" ---
-        // dataMap 的 key 是 "科目名稱::層級"，確保父子科目完全分離
+        // --- 步驟一：建立基礎總帳 (dataMap) 和央行獨立帳本 (centralBankSourceMap) ---
         const dataMap = new Map();
-        // centralBankSourceMap 只記錄央行來源科目的總數，用於後續調整
         const centralBankSourceMap = new Map();
 
         allExtractedData[reportKey].forEach(row => {
@@ -205,7 +203,7 @@ function displayAggregated() {
                 targetRow[col] += val;
             });
 
-            // 1.2: 如果是中央銀行，則單獨記錄其數值，為後續調整做準備
+            // 1.2: 如果是中央銀行，則單獨記錄其數值
             if (isCentralBank) {
                  if (!centralBankSourceMap.has(compositeKey)) {
                     const newRow = { ...row, [keyColumn]: keyText, 'indent_level': indent };
@@ -220,13 +218,12 @@ function displayAggregated() {
             }
         });
         
-        // 對營業基金的數值進行四捨五入
         if (selectedFundType === 'business') {
             dataMap.forEach(row => numericCols.forEach(col => row[col] = Math.round(row[col])));
             centralBankSourceMap.forEach(row => numericCols.forEach(col => row[col] = Math.round(row[col])));
         }
 
-        // --- 步驟二：僅對營業基金報表應用"中央銀行"的例外規則 ---
+        // --- 步驟二：應用"中央銀行"的例外規則 ---
         const mergeRules = {
             '損益表': [
                 { target: '採用權益法認列之關聯企業及合資利益之份額', sources: ['事業投資利益'], type: 'additive' },
@@ -249,42 +246,43 @@ function displayAggregated() {
         const sourceKeysToHide = new Set();
 
         activeMergeRules.forEach(rule => {
-            // 從 dataMap 中尋找目標科目 (父科目，通常層級最低)
-            let targetRowInMainMap = [...dataMap.values()]
-                .filter(r => r[keyColumn] === rule.target)
-                .sort((a,b) => a.indent_level - b.indent_level)[0];
-
-            if (!targetRowInMainMap) {
-                console.warn(`[Rule] Target account "${rule.target}" not found in main data map.`);
-                return;
+            // 找出 dataMap 中最主要的目標科目 (通常是 indent_level 最低的)
+            const targetRows = [...dataMap.values()].filter(r => r[keyColumn] === rule.target);
+            if (targetRows.length === 0) {
+                 console.warn(`[Rule] Target account "${rule.target}" not found.`);
+                 return;
             }
+            const mainTargetRow = targetRows.sort((a,b) => a.indent_level - b.indent_level)[0];
 
-            // 對於「彙總型(summary)」，需要先扣除央行對目標科目的原始貢獻值，避免重複計算
-            if (rule.type === 'summary') {
-                // 將目標科目清零，因為它的值將完全由來源科目構成
-                numericCols.forEach(col => { targetRowInMainMap[col] = 0; });
-            }
+            // 計算所有央行來源科目的總和
+            let sourceTotal = {};
+            numericCols.forEach(col => sourceTotal[col] = 0);
             
-            // 將所有央行來源科目的值，加到目標科目上
             rule.sources.forEach(sourceKey => {
-                sourceKeysToHide.add(sourceKey); // 標記來源科目，以便從最終報表中隱藏
-                
-                // 從央行獨立的帳本中尋找來源科目
-                const sourceRowsInCbMap = [...centralBankSourceMap.values()].filter(r => r[keyColumn] === sourceKey);
-                
-                if (sourceRowsInCbMap.length > 0) {
-                    sourceRowsInCbMap.forEach(sourceRow => {
-                        numericCols.forEach(col => {
-                            targetRowInMainMap[col] += (sourceRow[col] || 0);
-                        });
+                sourceKeysToHide.add(sourceKey);
+                const cbSourceRows = [...centralBankSourceMap.values()].filter(r => r[keyColumn] === sourceKey);
+                cbSourceRows.forEach(cbRow => {
+                    numericCols.forEach(col => {
+                        sourceTotal[col] += (cbRow[col] || 0);
                     });
-                }
+                });
             });
+
+            // 根據規則類型更新目標科目的值
+            if (rule.type === 'additive') {
+                numericCols.forEach(col => {
+                    mainTargetRow[col] += sourceTotal[col];
+                });
+            } else if (rule.type === 'summary') {
+                // 彙總型：直接用來源總和覆蓋目標值
+                numericCols.forEach(col => {
+                    mainTargetRow[col] = sourceTotal[col];
+                });
+            }
         });
 
         // --- 步驟三：按公版順序，生成最終報表 ---
         const finalRows = [];
-        const processedCompositeKeys = new Set();
         const standardOrder = {
              '損益表': PROFIT_LOSS_ACCOUNT_ORDER,
              '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER,
@@ -292,42 +290,41 @@ function displayAggregated() {
              '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER
         }[reportKey] || [];
         
-        const allRows = Array.from(dataMap.values());
+        // 建立一個可供修改的待處理清單
+        const pendingRowsMap = new Map(dataMap);
 
         // 3.1: 按公版順序添加科目
-        standardOrder.forEach((accountName, index) => {
-            // 央行的特定來源科目不應獨立顯示
-            if (sourceKeysToHide.has(accountName)) return;
-
-            // 尋找所有符合公版名稱的科目，並按層級排序
-            const matchingRows = allRows
-                .filter(r => r[keyColumn] === accountName)
-                .sort((a, b) => a.indent_level - b.indent_level);
-            
-            matchingRows.forEach((row, subIndex) => {
-                const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-                
-                // 為了解決同名但不同層級的問題，我們給非第一個同名科目加上序號
-                if (matchingRows.length > 1 && subIndex > 0) {
-                    const newRow = {...row}; // 複製一份，避免修改原始 dataMap
-                    newRow[keyColumn] = `${row[keyColumn]} (${subIndex + 1})`;
-                    finalRows.push(newRow);
-                } else {
-                    finalRows.push(row);
+        standardOrder.forEach(accountName => {
+            if (sourceKeysToHide.has(accountName)) {
+                // 如果是待隱藏的來源科目，從待處理清單中移除，確保它不會被加入
+                for (const key of pendingRowsMap.keys()) {
+                    if (key.startsWith(`${accountName}::`)) {
+                        pendingRowsMap.delete(key);
+                    }
                 }
-                
-                processedCompositeKeys.add(compositeKey);
-            });
+                return;
+            }
+
+            const matchingRows = [];
+            for (const [key, row] of pendingRowsMap.entries()) {
+                if (row[keyColumn] === accountName) {
+                    matchingRows.push(row);
+                    pendingRowsMap.delete(key); // 從待處理清單中移除
+                }
+            }
+            
+            if (matchingRows.length > 0) {
+                // 按縮排層級排序後加入最終結果
+                matchingRows.sort((a, b) => a.indent_level - b.indent_level);
+                finalRows.push(...matchingRows);
+            }
         });
 
         // 3.2: 添加所有不在公版中的剩餘科目
-        allRows.forEach(row => {
-            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            if (!processedCompositeKeys.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
-                finalRows.push(row);
-                processedCompositeKeys.add(compositeKey);
-            }
-        });
+        if (pendingRowsMap.size > 0) {
+            const remainingRows = [...pendingRowsMap.values()].filter(row => !sourceKeysToHide.has(row[keyColumn]));
+            finalRows.push(...remainingRows);
+        }
 
         summaryData[reportKey] = finalRows;
     }
@@ -453,7 +450,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
                 <div class="export-buttons">
                     <button class="export-btn json" data-format="json" data-report-key="${reportKey}">匯出 JSON</button>
                     <button class="export-btn xlsx" data-format="xlsx" data-report-key="${reportKey}">匯出 XLSX</button>
-                    <button class="export-btn" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
+                    <button class="export-btn" data-format="html" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
                 </div>`;
 
             contentHtml += `<div id="${reportKey}" class="tab-content ${isFirst ? 'active' : ''}">
