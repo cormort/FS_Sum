@@ -3,25 +3,31 @@
 import { FULL_CONFIG } from './config.js';
 import { findSheet, extractFundName, findHeaderRowIndex, getHeaderMapping } from './utils.js';
 
-// ★★★ 核心修正：最終版，只專注於讀取 Excel 原生樣式縮排 ★★★
-function getIndentLevel(sheet, rowIndex, colIndex) {
-    try {
-        const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
-        // 直接讀取並返回 Excel 的內建樣式縮排值。如果不存在或為空，則返回 0。
-        const cell = sheet[cellAddress];
-        if (cell && cell.s && cell.s.alignment && cell.s.alignment.indent) {
-            return cell.s.alignment.indent;
-        }
-        return 0;
-    } catch (e) {
-        // 如果發生任何預期外的錯誤，安全地返回 0
-        console.warn(`無法讀取單元格樣式於 行:${rowIndex}, 列:${colIndex}.`);
-        return 0;
+// ★★★ 核心修正：專注於偵測「前置空白」的縮排函式 ★★★
+function getIndentLevelFromWhitespace(rawText) {
+    const text = String(rawText || '');
+    // 使用正規表示式匹配所有前置的半形(s)和全形(　)空白
+    const match = text.match(/^(\s|　)+/); 
+    if (!match) {
+        return 0; // 沒有前置空白，是第1級科目 (indent 0)
     }
+
+    const leadingWhitespace = match[0];
+    let visualWidth = 0;
+    for (const char of leadingWhitespace) {
+        // 全形空白寬度約等於2個半形空白
+        visualWidth += (char === '　' ? 2 : 1);
+    }
+    
+    // 假設每2個半形空白的寬度，代表一級縮排
+    const indentUnit = 2; 
+    const indentLevel = Math.floor(visualWidth / indentUnit);
+
+    return indentLevel;
 }
 
 
-// --- 所有解析器均已更新，使用最精簡的 getIndentLevel 函式 ---
+// --- 所有解析器均已更新，使用新的 getIndentLevelFromWhitespace 函式 ---
 
 function _parseFixed(data, config, fundName, sheet, startRow, colMap) {
     const records = [];
@@ -31,13 +37,14 @@ function _parseFixed(data, config, fundName, sheet, startRow, colMap) {
         const keyColIndex = colMap[config.keyColumn];
         if (keyColIndex === undefined) continue;
 
-        const keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
         
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
         
-        record.indent_level = getIndentLevel(sheet, i, keyColIndex);
+        record.indent_level = getIndentLevelFromWhitespace(keyTextRaw);
 
         config.columns.forEach(colName => {
             const colIndex = colMap[colName];
@@ -67,13 +74,14 @@ function parseNormalTable(data, config, fundName, sheet) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
         
-        const keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
 
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
         
-        record.indent_level = getIndentLevel(sheet, i, keyColIndex);
+        record.indent_level = getIndentLevelFromWhitespace(keyTextRaw);
         
         for (const colName in headerMapping) {
             const value = row[headerMapping[colName]];
@@ -113,13 +121,14 @@ function _parseSideBySide(data, config, fundName, sheet) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
 
-        const keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
 
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
 
-        record.indent_level = getIndentLevel(sheet, i, keyColIndex);
+        record.indent_level = getIndentLevelFromWhitespace(keyTextRaw);
         
         for (const colName in headerMapping) {
             const value = row[headerMapping[colName]];
@@ -131,6 +140,8 @@ function _parseSideBySide(data, config, fundName, sheet) {
     return records;
 }
 
+// ... (其他解析函式保持不變，因為它們都依賴 _parseFixed 或 parseNormalTable) ...
+
 function parseBalanceSheet(data, fundName, sheet) {
     const assetConfig = { keyColumn: '科目', columns: ['科目', '本年度決算核定數', '上年度決算審定數', '比較增減'], subTableIdentifier: '資產' };
     const liabilityConfig = { keyColumn: '科目', columns: ['科目', '本年度決算核定數', '上年度決算審定數', '比較增減'], subTableIdentifier: '負債' };
@@ -139,7 +150,6 @@ function parseBalanceSheet(data, fundName, sheet) {
     return { '平衡表_資產': assetRecords, '平衡表_負債及權益': liabilityRecords };
 }
 
-// --- Governmental Fund Parsers ---
 function parseFixedYuchuBiao(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '預算數': 3, '原列決算數': 5, '修正數': 8, '決算核定數': 9, '預算與決算核定數比較增減': 11 };
     return _parseFixed(data, config, fundName, sheet, 4, colMap);
@@ -153,7 +163,6 @@ function parseFixedShouzhiBiao(data, config, fundName, sheet) {
     return _parseFixed(data, config, fundName, sheet, 4, colMap);
 }
 
-// --- Business Fund Parsers ---
 function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
     const records = [];
     const colMap = { '科目': 2, '上年度決算數': 0, '本年度預算數': 3, '原列決算數': 5, '修正數': 6, '決算核定數': 7 };
@@ -161,27 +170,19 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
     const numericCols = config.columns.filter(c => c !== config.keyColumn);
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
     let inNonOperatingSection = false;
-
     for (let i = 6; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
-        
-        let keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        let keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
-
-        if (normalize(keyText) === '營業外收入') {
-            inNonOperatingSection = true;
-        }
+        if (normalize(keyText) === '營業外收入') { inNonOperatingSection = true; }
         const normalizedKey = normalize(keyText);
         if (normalizedKey === '採用權益法認列之關聯企業及合資利益之份額' || normalizedKey === '採用權益法認列之關聯企業及合資損失之份額') {
-            if (inNonOperatingSection) {
-                keyText += ' (營業外)';
-            }
+            if (inNonOperatingSection) { keyText += ' (營業外)'; }
         }
-        
         const record = { '基金名稱': fundName, [config.keyColumn]: keyText };
         let hasMeaningfulData = false;
-        
         numericCols.forEach(colName => {
             const colIndex = colMap[colName];
             const value = (colIndex !== undefined) ? row[colIndex] : '';
@@ -190,12 +191,8 @@ function parseBusinessProfitLoss_Stateful(data, config, fundName, sheet) {
                 hasMeaningfulData = true;
             }
         });
-        
-        record.indent_level = getIndentLevel(sheet, i, keyColIndex);
-        
-        if (hasMeaningfulData || keyText) {
-            records.push(record);
-        }
+        record.indent_level = getIndentLevelFromWhitespace(keyTextRaw);
+        if (hasMeaningfulData || keyText) { records.push(record); }
     }
     return records;
 }
@@ -207,24 +204,18 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
     const numericCols = config.columns.filter(c => c !== config.keyColumn);
     const normalize = (name) => String(name || '').replace(/\s|　/g, '').split('(')[0];
     let inDeficitSection = false; 
-
     for (let i = 6; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
-        
-        let keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        let keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註')) continue;
-
-        if (normalize(keyText) === '虧損之部') {
-            inDeficitSection = true;
-        }
+        if (normalize(keyText) === '虧損之部') { inDeficitSection = true; }
         if (normalize(keyText) === '其他綜合損益轉入數') {
             keyText += inDeficitSection ? ' (虧損之部)' : ' (盈餘之部)';
         }
-
         const record = { '基金名稱': fundName, [config.keyColumn]: keyText };
         let hasMeaningfulData = false;
-
         numericCols.forEach(colName => {
             const colIndex = colMap[colName];
             const value = (colIndex !== undefined) ? row[colIndex] : '';
@@ -233,12 +224,8 @@ function parseBusinessAppropriation_Stateful(data, config, fundName, sheet) {
                 hasMeaningfulData = true;
             }
         });
-
-        record.indent_level = getIndentLevel(sheet, i, keyColIndex);
-
-        if (hasMeaningfulData || keyText) {
-            records.push(record);
-        }
+        record.indent_level = getIndentLevelFromWhitespace(keyTextRaw);
+        if (hasMeaningfulData || keyText) { records.push(record); }
     }
     return records;
 }
@@ -248,17 +235,14 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
     const colMap = { '項目': 0, '本年度預算數': 1, '原列決算數': 2, '修正數': 3, '決算核定數': 4 };
     const keyColIndex = colMap[config.keyColumn];
     const startRow = 5;
-
     for (let i = startRow; i < data.length; i++) {
         const row = data[i];
         if (!Array.isArray(row) || row.length === 0) continue;
-
-        const keyText = String(row[keyColIndex] || '').trim();
+        const keyTextRaw = String(row[keyColIndex] || '');
+        const keyText = keyTextRaw.trim();
         if (!keyText || keyText.startsWith('註') || keyText.startsWith('附註')) continue;
-
         const record = { '基金名稱': fundName };
         let hasMeaningfulData = false;
-        
         config.columns.forEach(colName => {
             const colIndex = colMap[colName];
             const value = colIndex !== undefined ? row[colIndex] : '';
@@ -267,16 +251,9 @@ function parseFixedBusinessCashFlow(data, config, fundName, sheet) {
                 hasMeaningfulData = true;
             }
         });
-        
-        record.indent_level = getIndentLevel(sheet, i, keyColIndex);
-
-        if (hasMeaningfulData || keyText) {
-            records.push(record);
-        }
-
-        if (keyText.includes('期末現金及約當現金')) {
-            break; 
-        }
+        record.indent_level = getIndentLevelFromWhitespace(keyTextRaw);
+        if (hasMeaningfulData || keyText) { records.push(record); }
+        if (keyText.includes('期末現金及約當現金')) { break; }
     }
     return records;
 }
@@ -285,11 +262,9 @@ function parseBusinessBalanceSheet_SideBySide(data, config, fundName, sheet) {
     const assetConfig = { ...config };
     const assetColMap = { '科目': 3, '上年度決算數': 1, '原列決算數': 4, '修正數': 5, '決算核定數': 6 };
     const assetRecords = _parseFixed(data, assetConfig, fundName, sheet, 6, assetColMap);
-    
     const liabilityConfig = { ...config };
     const liabilityColMap = { '科目': 10, '上年度決算數': 8, '原列決算數': 11, '修正數': 12, '決算核定數': 13 };
     const liabilityRecords = _parseFixed(data, liabilityConfig, fundName, sheet, 6, liabilityColMap);
-    
     return { '資產負債表_資產': assetRecords, '資產負債表_負債及權益': liabilityRecords };
 }
 
@@ -305,29 +280,24 @@ const PARSERS = {
     fixed_business_balancesheet_sidebyside: parseBusinessBalanceSheet_SideBySide,
 };
 
-// --- Main File Processing Function ---
 export function processFile(file, selectedFundType) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
-                const workbook = XLSX.read(e.target.result, { type: 'array', cellStyles: true });
+                const workbook = XLSX.read(e.target.result, { type: 'array' }); // cellStyles: false is safer now
                 let fundName = extractFundName(workbook, selectedFundType) || file.name.replace(/\.xlsx?$/, '');
                 let extractedData = {};
                 const activeConfig = FULL_CONFIG[selectedFundType];
-
                 for (const reportKey in activeConfig) {
                     const config = activeConfig[reportKey];
                     const sheetName = findSheet(workbook, config.sheetKeyword);
                     if (!sheetName) continue;
-
                     const sheet = workbook.Sheets[sheetName];
                     const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
                     const parserFunc = PARSERS[config.parser];
-
                     if (parserFunc) {
                         let records = parserFunc(data, config, fundName, sheet);
-
                         if (records) {
                             if (reportKey === '平衡表' || reportKey === '資產負債表') {
                                 for (const key in records) {
