@@ -167,6 +167,10 @@ function buildTree(records, keyColumn, numericCols) {
         numericCols.forEach(col => {
             data[col] = parseFloat(String(record[col] || '0').replace(/,/g, '')) || 0;
         });
+        // 把基金名稱也存入 data，以便後續使用
+        if (record['基金名稱']) {
+            data['基金名稱'] = record['基金名稱'];
+        }
         const node = new Node(name, indent, data);
         while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
             stack.pop();
@@ -213,11 +217,12 @@ function recalculateTotals(node, numericCols) {
 function flattenTree(node, result, keyColumn, numericCols) {
     if (node.name !== 'Root') {
         const row = {
+            ...node.data, // ★ 核心修改：將節點的所有 data (包含基金名稱) 展開到 row 中
             [keyColumn]: node.name,
             'indent_level': node.indent,
             'isSummary': node.children.length > 0
         };
-        numericCols.forEach(col => { row[col] = node.data[col] || 0; });
+        // numericCols.forEach(col => { row[col] = node.data[col] || 0; });
         result.push(row);
     }
     node.children.forEach(child => flattenTree(child, result, keyColumn, numericCols));
@@ -238,7 +243,7 @@ function displayIndividualFund(e) {
             const config = FULL_CONFIG[selectedFundType]?.[baseKey];
             if(config && fundRecords.length > 0) {
                 const keyColumn = config.keyColumn;
-                const numericCols = config.columns.filter(c => c !== keyColumn);
+                const numericCols = config.columns.filter(c => c !== keyColumn && c !== '基金名稱');
                 const tree = buildTree(fundRecords, keyColumn, numericCols);
                 const flattened = [];
                 flattenTree(tree, flattened, keyColumn, numericCols);
@@ -246,7 +251,7 @@ function displayIndividualFund(e) {
             }
         }
     }
-    outputContainer.innerHTML = createTabsAndTables(fundData);
+    outputContainer.innerHTML = createTabsAndTables(fundData, {}, 'individual');
     initTabs();
     initExportButtons();
 }
@@ -262,7 +267,7 @@ function displayAggregated() {
         if (!config) continue;
         
         const keyColumn = config.keyColumn;
-        const numericCols = config.columns.filter(c => c !== keyColumn);
+        const numericCols = config.columns.filter(c => c !== keyColumn && c !== '基金名稱');
         
         const fundTrees = fundNames.map(name => {
             const fundRecords = sourceReportData.filter(r => r['基金名稱'] === name);
@@ -271,6 +276,7 @@ function displayAggregated() {
 
         const summaryTree = buildTree([], keyColumn, numericCols);
         fundTrees.forEach(tree => mergeTrees(summaryTree, tree, numericCols));
+        summaryTree.data['基金名稱'] = '所有基金加總';
 
         const mergeRules = {
             '損益表': [ { target: '採用權益法認列之關聯企業及合資利益之份額', sources: ['事業投資利益'], type: 'additive' }, { target: '採用權益法認列之關聯企業及合資損失之份額', sources: ['事業投資損失'], type: 'additive' } ],
@@ -346,6 +352,7 @@ function displayAggregated() {
             if (matchingRows.length > 0) {
                  matchingRows.sort((a,b) => a.indent_level - b.indent_level);
                  matchingRows.forEach(row => {
+                    row['基金名稱'] = '所有基金加總'; // 確保加總模式下有名稱
                     if (selectedFundType === 'business') {
                         numericCols.forEach(col => row[col] = Math.round(row[col]));
                     }
@@ -358,6 +365,7 @@ function displayAggregated() {
         flattenedData.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
             if (!processedItems.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
+                 row['基金名稱'] = '所有基金加總';
                  if (selectedFundType === 'business') {
                     numericCols.forEach(col => row[col] = Math.round(row[col]));
                 }
@@ -372,9 +380,7 @@ function displayAggregated() {
     initExportButtons();
 }
 
-function displayComparison() {
-    // ... 此函式保持不變 ...
-}
+function displayComparison() { /* ... 此函式保持不變 ... */ }
 
 // --- HTML渲染與UI互動函式 ---
 
@@ -392,43 +398,45 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
             allPossibleKeys.push(k);
         }
     });
-    const dataKeys = Object.keys(data);
+
+    const dataKeys = Object.keys(data).filter(key => data[key] && data[key].length > 0);
     const orderedDataKeys = allPossibleKeys.filter(k => dataKeys.includes(k));
+
     orderedDataKeys.forEach(reportKey => {
-        if (data[reportKey] && data[reportKey].length > 0) {
-            const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
-            const config = activeConfig[baseKey];
-            if (!config) return;
-            const columns = config.columns;
-            const tabName = reportKey.replace(/_/g, ' ');
-            tabsHtml += `<button class="tab-link ${isFirst ? 'active' : ''}" data-tab="${reportKey}">${tabName}</button>`;
-            
-            const headers = customHeaders[reportKey] || (mode === 'individual' ? columns : ['基金名稱', ...columns]);
-            let tableContent = createTableHtml(data[reportKey], headers, mode);
-            
-            const exportButtons = `
-                <div class="export-buttons">
-                    <button class="export-btn json" data-format="json" data-report-key="${reportKey}">匯出 JSON</button>
-                    <button class="export-btn xlsx" data-format="xlsx" data-report-key="${reportKey}">匯出 XLSX</button>
-                    <button class="export-btn" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
-                </div>`;
-            contentHtml += `<div id="${reportKey}" class="tab-content ${isFirst ? 'active' : ''}">
-                <div class="tab-header"><h2>${tabName}</h2>${exportButtons}</div>${tableContent}
+        const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
+        const config = activeConfig[baseKey];
+        if (!config) return;
+
+        const columns = config.columns;
+        const tabName = reportKey.replace(/_/g, ' ');
+        tabsHtml += `<button class="tab-link ${isFirst ? 'active' : ''}" data-tab="${reportKey}">${tabName}</button>`;
+        
+        const headers = customHeaders[reportKey] || (mode === 'individual' ? columns : ['基金名稱', ...columns]);
+        let tableContent = createTableHtml(data[reportKey], headers, mode);
+        
+        const exportButtons = `
+            <div class="export-buttons">
+                <button class="export-btn json" data-format="json" data-report-key="${reportKey}">匯出 JSON</button>
+                <button class="export-btn xlsx" data-format="xlsx" data-report-key="${reportKey}">匯出 XLSX</button>
+                <button class="export-btn" data-format="html" data-report-key="${reportKey}">匯出 HTML</button>
             </div>`;
-            isFirst = false;
-        }
+        contentHtml += `<div id="${reportKey}" class="tab-content ${isFirst ? 'active' : ''}">
+            <div class="tab-header"><h2>${tabName}</h2>${exportButtons}</div>${tableContent}
+        </div>`;
+        isFirst = false;
     });
     tabsHtml += '</div>';
     if (contentHtml === '') { return '<p>無資料可顯示。</p>'; }
     return tabsHtml + contentHtml;
 }
 
-// ★★★ 核心修改：實現新的加粗邏輯 ★★★
+// ★★★ 核心修改：修正加粗邏輯和欄位偏移問題 ★★★
 function createTableHtml(records, headers, mode = 'default') {
     let table = '<table><thead><tr>';
     const keyColumns = ['科目', '項目', '基金名稱']; 
     table += headers.map(h => `<th data-column-key="${h}">${h}</th>`).join('');
     table += '</tr></thead><tbody>';
+
     records.forEach(record => {
         table += '<tr>';
         headers.forEach(header => {
@@ -439,7 +447,7 @@ function createTableHtml(records, headers, mode = 'default') {
             let style = '';
             let className = '';
             
-            const isSummaryRow = record.isSummary === true; // 判斷是否為非最底層
+            const isSummaryRow = record.isSummary === true;
 
             if (isKeyColumn) {
                 if (header !== '基金名稱' && indentLevel > 0) {
@@ -455,7 +463,7 @@ function createTableHtml(records, headers, mode = 'default') {
                 if (isNumericField) {
                     const numVal = Number(rawVal);
                     displayVal = numVal.toLocaleString();
-                    if (isSummaryRow) { // 只有非最底層的數值才加粗
+                    if (isSummaryRow) {
                         displayVal = `<strong>${displayVal}</strong>`;
                     }
                     className = 'numeric-data';
