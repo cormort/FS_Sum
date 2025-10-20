@@ -142,7 +142,18 @@ function displayAggregated() {
         const numericCols = config.columns.filter(c => c !== keyColumn && c !== '基金名稱');
         const ledger = new Map();
 
-        // 1. 加總所有「其他基金」(非中央銀行)
+        // --- Helper Function: 直接在 Ledger 中按名稱查找條目 ---
+        const findLedgerEntryByName = (name) => {
+            // Map 的 values() 返回的是物件，可以直接查找
+            for (const entry of ledger.values()) {
+                if (entry[keyColumn] === name) {
+                    return entry; // 返回找到的整個物件
+                }
+            }
+            return null; // 沒找到
+        };
+
+        // --- Step 1: 加總所有「其他基金」(非中央銀行) ---
         const otherFundsData = sourceReportData.filter(r => r['基金名稱'] !== '中央銀行');
         otherFundsData.forEach(row => {
             const keyText = row[keyColumn]?.trim();
@@ -158,19 +169,10 @@ function displayAggregated() {
             });
         });
 
-        // Helper: 查找 ledger 中現有科目的縮排
-        const getExistingIndent = (name) => {
-            for (const key of ledger.keys()) {
-                if (key.startsWith(`${name}::`)) {
-                    return parseInt(key.split('::')[1]);
-                }
-            }
-            return null;
-        };
-
-        // 2. 處理「中央銀行」的數據，並應用雙重累加規則
+        // --- Step 2: 處理「中央銀行」的數據，並應用雙重累加規則 ---
         const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
         const mergeRules = {
+             // 規則擴展：將所有可能的來源都對應到目標
             '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資', '融通': '押匯貼現及放款', '銀行業融通': '押匯貼現及放款' },
             '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
         };
@@ -182,45 +184,53 @@ function displayAggregated() {
             const keyText = row[keyColumn]?.trim();
             if (!keyText) return;
             const indent = row.indent_level || 0;
-            const originalRowValue = Object.fromEntries(numericCols.map(col => [col, parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0]));
+            const rowValues = Object.fromEntries(numericCols.map(col => [col, parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0]));
 
-            // 檢查是否為需要雙重累加的來源科目
+            // 判斷是否為需要特殊處理的來源科目
             if (sourceToTargetMap.has(keyText)) {
                 // ACCUMULATION 1: 原始科目 (Source) 保持並累加其數值
-                const originalCompositeKey = `${keyText}::${indent}`;
-                if (!ledger.has(originalCompositeKey)) {
-                    ledger.set(originalCompositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                // 這樣做是為了讓它出現在 ledger 中，之後再將其過濾掉
+                const sourceCompositeKey = `${keyText}::${indent}`;
+                if (!ledger.has(sourceCompositeKey)) {
+                    ledger.set(sourceCompositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
                 }
-                const originalSummaryRow = ledger.get(originalCompositeKey);
-                numericCols.forEach(col => originalSummaryRow[col] += originalRowValue[col]);
+                const sourceLedgerRow = ledger.get(sourceCompositeKey);
+                numericCols.forEach(col => sourceLedgerRow[col] += rowValues[col]);
 
                 // ACCUMULATION 2: 目標科目 (Target) 額外累加來源數值
                 const targetName = sourceToTargetMap.get(keyText);
-                const targetIndent = getExistingIndent(targetName) ?? indent; // 優先使用已存在的縮排
-                const targetCompositeKey = `${targetName}::${targetIndent}`;
-                if (!ledger.has(targetCompositeKey)) {
-                    ledger.set(targetCompositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                let targetLedgerRow = findLedgerEntryByName(targetName);
+
+                // 如果目標科目還不存在於 Ledger 中，就創建一個
+                if (!targetLedgerRow) {
+                    // 使用來源的縮排作為一個合理的預設值
+                    const targetIndent = indent;
+                    const targetCompositeKey = `${targetName}::${targetIndent}`;
+                    const newEntry = { [keyColumn]: targetName, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) };
+                    ledger.set(targetCompositeKey, newEntry);
+                    targetLedgerRow = newEntry; // 指向新創建的物件
                 }
-                const targetSummaryRow = ledger.get(targetCompositeKey);
-                numericCols.forEach(col => targetSummaryRow[col] += originalRowValue[col]);
+                
+                // 將來源科目的數值累加到目標科目上
+                numericCols.forEach(col => {
+                    targetLedgerRow[col] += rowValues[col];
+                });
 
             } else {
                 // 處理非合併的正常科目 (單次累加)
-                const existingIndent = getExistingIndent(keyText);
-                const targetIndent = existingIndent ?? indent; // 強制使用已存在的縮排以避免數據分散
-                const compositeKey = `${keyText}::${targetIndent}`;
-                if (!ledger.has(compositeKey)) {
-                    ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                const compositeKey = `${keyText}::${indent}`;
+                 if (!ledger.has(compositeKey)) {
+                    ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
                 }
-                const summaryRow = ledger.get(compositeKey);
-                numericCols.forEach(col => summaryRow[col] += originalRowValue[col]);
+                const ledgerRow = ledger.get(compositeKey);
+                numericCols.forEach(col => ledgerRow[col] += rowValues[col]);
             }
         });
-
-        // 3. 排序、建立階層、還原數值
+        
+        // --- Step 3: 排序、建立階層樹並過濾 ---
         let finalDataList = Array.from(ledger.values());
         
-        // 3.1 核心修正：在建立階層樹前，必須先按公版順序排序
+        // 3.1 根據公版順序排序，確保父子結構正確
         const standardOrderMap = { '資產負債表_資產': PUBLIC_ASSET_ORDER, '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER, '損益表': PROFIT_LOSS_ACCOUNT_ORDER, '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER, '現金流量表': CASH_FLOW_ACCOUNT_ORDER };
         const order = standardOrderMap[reportKey] || [];
         const orderIndexMap = new Map(order.map((name, index) => [name, index]));
@@ -228,47 +238,18 @@ function displayAggregated() {
             const indexA = orderIndexMap.get(a[keyColumn]) ?? Infinity;
             const indexB = orderIndexMap.get(b[keyColumn]) ?? Infinity;
             if (indexA !== indexB) return indexA - indexB;
-            return a.indent_level - b.indent_level; // 若順序相同或不在公版內，則按縮排排序
-        });
-        
-        // 3.2 保護原始彙總數值
-        const preservedValues = new Map();
-        finalDataList.forEach(row => {
-            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            preservedValues.set(compositeKey, row);
+            return a.indent_level - b.indent_level;
         });
 
-        // 3.3 僅用來建立結構和 isSummary 標籤 (此處的數值會被忽略)
+        // 3.2 建立階層樹以獲取正確的 isSummary 標籤
         const tempTree = buildTree(finalDataList, keyColumn, numericCols);
         const finalRowsWithHierarchy = [];
         flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
-
-        // 3.4 還原正確的彙總數值
-        finalRowsWithHierarchy.forEach(row => {
-            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            const originalData = preservedValues.get(compositeKey);
-            if (originalData) {
-                numericCols.forEach(col => {
-                    row[col] = originalData[col];
-                });
-                // 注意：不還原 isSummary，因為 flattenTree 產生的才是最準確的
-            }
-        });
-
-        // 4. 過濾掉應隱藏的來源科目，並整理最終輸出
-        let finalRows = finalRowsWithHierarchy.filter(row => !sourceKeysToHide.has(row[keyColumn]));
         
-        // 補上不在公版順序中的其他項目 (但仍需過濾隱藏科目)
-        const processedInOrder = new Set(finalRows.map(r => `${r[keyColumn]}::${r.indent_level}`));
-        finalDataList.forEach(row => {
-            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            if (!processedInOrder.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
-                 // 這裡需要重新從 finalRowsWithHierarchy 找到帶有 isSummary 的對應項
-                 const completeRow = finalRowsWithHierarchy.find(r => `${r[keyColumn]}::${r.indent_level}` === compositeKey);
-                 if(completeRow) finalRows.push(completeRow);
-            }
-        });
+        // 3.3 過濾掉應隱藏的中央銀行來源科目
+        let finalRows = finalRowsWithHierarchy.filter(row => !sourceKeysToHide.has(row[keyColumn]));
 
+        // 3.4 格式化最終輸出
         finalRows.forEach(row => {
             row['基金名稱'] = '所有基金加總';
             if (selectedFundType === 'business') {
@@ -282,7 +263,6 @@ function displayAggregated() {
     initTabs();
     initExportButtons();
 }
-
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
