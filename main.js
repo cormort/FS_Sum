@@ -76,8 +76,6 @@ function refreshView() {
     }
 }
 
-// 移除 buildTree 和 flattenTree 函數，避免引入階層計算的數值覆蓋問題。
-// class Node 保持不變
 class Node {
     constructor(name, indent, data = {}) { this.name = name.trim(); this.indent = indent; this.data = data; this.children = []; }
 }
@@ -88,7 +86,8 @@ function buildTree(records, keyColumn, numericCols) {
         const name = record[keyColumn]?.trim();
         if (!name) return;
         const indent = record.indent_level || 0;
-        const data = { '基金名稱': record['基金名稱'] };
+        // 這裡 buildTree 創建的 node.data 數值會被覆蓋，這是正常的，因為我們會在之後還原。
+        const data = { '基金名稱': record['基金名稱'] }; 
         numericCols.forEach(col => { data[col] = parseFloat(String(record[col] || '0').replace(/,/g, '')) || 0; });
         const node = new Node(name, indent, data);
         while (stack.length > 1 && stack[stack.length - 1].indent >= indent) { stack.pop(); }
@@ -99,12 +98,12 @@ function buildTree(records, keyColumn, numericCols) {
 }
 function flattenTree(node, result, keyColumn) {
     if (node.name !== 'Root') {
+        // isSummary 的判斷是 buildTree 的副作用
         const row = { ...node.data, [keyColumn]: node.name, 'indent_level': node.indent, 'isSummary': node.children.length > 0 };
         result.push(row);
     }
     node.children.forEach(child => flattenTree(child, result, keyColumn));
 }
-
 
 function displayIndividualFund(e) {
     const selectedFund = e.target.value;
@@ -153,7 +152,7 @@ function displayAggregated() {
             const indent = row.indent_level || 0;
             const compositeKey = `${keyText}::${indent}`;
             if (!ledger.has(compositeKey)) {
-                ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, 'isSummary': false, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
             const summaryRow = ledger.get(compositeKey);
             numericCols.forEach(col => {
@@ -164,6 +163,7 @@ function displayAggregated() {
 
         // Helper: 查找 ledger 中是否存在該名稱的科目，並返回其縮排
         const getExistingIndent = (name) => {
+            // 查找所有名稱匹配的 key，返回第一個找到的縮排
             const existingKey = [...ledger.keys()].find(k => k.startsWith(`${name}::`));
             return existingKey ? parseInt(existingKey.split('::')[1]) : null;
         };
@@ -206,7 +206,7 @@ function displayAggregated() {
             if (sourceToTargetMap.has(keyText)) {
                 targetName = sourceToTargetMap.get(keyText);
                 
-                // 對於合併的目標科目，查找其他基金中是否存在，如果存在，則強制使用該縮排
+                // 優先使用其他基金已存在的縮排
                 const existingTargetIndent = getExistingIndent(targetName); 
                 
                 if (existingTargetIndent !== null) {
@@ -228,7 +228,7 @@ function displayAggregated() {
             // A. 處理合併後的目標科目 / 正常科目
             const compositeKey = `${targetName}::${targetIndent}`;
             if (!ledger.has(compositeKey)) {
-                ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, 'isSummary': false, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
             
             const summaryRow = ledger.get(compositeKey);
@@ -239,18 +239,38 @@ function displayAggregated() {
 
         });
         
-        // 3. 準備最終輸出：從 ledger 轉換為可排序的列表
-        // 由於移除了 buildTree/flattenTree，我們直接使用 ledger.values()
-        let finalRowsForSort = Array.from(ledger.values());
+        // 3. 建立階層樹以標記 isSummary (同時保護數值)
+        const finalDataList = Array.from(ledger.values());
         
-        // 為了讓表格看起來像階層，這裡可以根據公版定義簡單標記 isSummary
-        // 我們將所有縮排 < 2 的科目視為彙總父級
-        finalRowsForSort.forEach(row => {
-            if (row['indent_level'] < 2 || row[keyColumn] === '合　　計') {
-                row.isSummary = true;
-            }
+        // ★ 核心：保護原始數值 (Preserve Values) ★
+        // 複製 ledger 中的最終累加數值
+        const preservedValues = new Map();
+        finalDataList.forEach(row => {
+            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
+            const data = {};
+            numericCols.forEach(col => { data[col] = row[col]; });
+            preservedValues.set(compositeKey, data);
         });
 
+        // 運行 buildTree 來產生準確的階層結構（children 屬性）
+        const tempTree = buildTree(finalDataList, keyColumn, numericCols); 
+        
+        // 運行 flattenTree 來生成包含 isSummary 標籤的列表
+        const finalRowsWithHierarchy = [];
+        flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
+        
+        // ★ 核心：還原原始數值 (Restore Values) ★
+        finalRowsWithHierarchy.forEach(row => {
+            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
+            const originalData = preservedValues.get(compositeKey);
+            if (originalData) {
+                // 將 ledger 中正確累加的數值還原給 row
+                numericCols.forEach(col => {
+                    row[col] = originalData[col]; 
+                });
+            }
+        });
+        
         // 4. 按公版順序排序
         const standardOrderMap = { '損益表': PROFIT_LOSS_ACCOUNT_ORDER, '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER, '現金流量表': CASH_FLOW_ACCOUNT_ORDER, '資產負債表_資產': PUBLIC_ASSET_ORDER, '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER };
         const order = standardOrderMap[reportKey] || [];
@@ -259,20 +279,12 @@ function displayAggregated() {
         // 隱藏的來源科目
         const sourceKeysToHide = centralBankOnlyItems;
         
-        // 將 ledger 轉換為 {name: [row1, row2, ...]} 以便快速查找
-        const ledgerByName = finalRowsForSort.reduce((acc, row) => {
-            const name = row[keyColumn];
-            if (!acc[name]) acc[name] = [];
-            acc[name].push(row);
-            return acc;
-        }, {});
-
-
         // 從公版順序開始，逐一查找並添加科目
         order.forEach(accountName => {
             if (sourceKeysToHide.has(accountName)) return; 
             
-            const matchingRows = ledgerByName[accountName] || [];
+            // 查找所有名稱匹配的行 (不同縮排)
+            const matchingRows = finalRowsWithHierarchy.filter(row => row[keyColumn] === accountName);
             
             if (matchingRows.length > 0) {
                  // 確保所有同名科目按縮排層級正確排序
@@ -281,6 +293,7 @@ function displayAggregated() {
                  matchingRows.forEach(row => {
                     const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
                     if (!processedItems.has(compositeKey)) {
+                       // isSummary 已被 flattenTree 正確標記
                        row['基金名稱'] = '所有基金加總';
                        if (selectedFundType === 'business') {
                            numericCols.forEach(col => row[col] = Math.round(row[col]));
@@ -292,8 +305,8 @@ function displayAggregated() {
             }
         });
 
-        // 將不在公版中的項目也加回來 (如果公版不包含該科目，且它不是被隱藏的來源科目)
-        finalRowsForSort.forEach(row => {
+        // 將不在公版中的項目也加回來
+        finalRowsWithHierarchy.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
             if (!processedItems.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
                 row['基金名稱'] = '所有基金加總';
@@ -413,7 +426,8 @@ function createTableHtml(records, headers, mode = 'default') {
             const indentLevel = record.indent_level || 0;
             let style = '';
             let className = '';
-            const isSummaryRow = record.isSummary === true;
+            // 使用 isSummary 屬性來判斷是否加粗
+            const isSummaryRow = record.isSummary === true; 
 
             if (isKeyColumn) {
                 if (header !== '基金名稱' && indentLevel > 0) {
