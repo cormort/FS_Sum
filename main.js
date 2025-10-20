@@ -159,21 +159,18 @@ function displayAggregated() {
             });
         });
 
-        // 2. 處理「中央銀行」的數據，並應用例外規則
+// 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
             '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資' },
             '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
         };
-        // 彙總型規則的來源科目 (融通, 銀行業融通) 也直接納入合併規則，指向 '押匯貼現及放款'
-        const summaryRuleSources = { '押匯貼現及放款': ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] };
         
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
         const centralBankOnlyItems = new Set(); // 儲存中央銀行來源科目，用於稍後隱藏
 
         // 彙總型規則：將來源科目（如融通、銀行業融通）納入 sourceToTargetMap，指向目標科目 (押匯貼現及放款)
-        // 只有『融通』和『銀行業融通』應被隱藏，其他子科目 (押匯及貼現等) 保持不變，讓它們在 hierarchy 中正常累加
         if (reportKey === '資產負債表_資產') {
             const targetName = '押匯貼現及放款';
             ['融通', '銀行業融通'].forEach(sourceName => {
@@ -194,22 +191,31 @@ function displayAggregated() {
             if (sourceToTargetMap.has(keyText)) {
                 const targetName = sourceToTargetMap.get(keyText);
                 
-                // 查找目標科目在 ledger 中的 key，優先使用其他基金已存在的縮排
-                // 如果目標科目不存在，則使用中央銀行的原始縮排
+                // 查找目標科目在 ledger 中的 key
                 const existingTargetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`));
+                
+                // --- 修正的邏輯：確保合併目標科目有正確的縮排 ---
                 if (existingTargetKey) {
+                    // 如果其他基金或中央銀行自己的數據中已存在該目標科目，則沿用其縮排
                     keyText = targetName;
                     indent = parseInt(existingTargetKey.split('::')[1]);
                 } else {
+                    // 如果目標科目不存在，則強制使用一個較低的縮排（例如 0 或 1），
+                    // 讓它能成為頂層科目並被公版順序捕捉到
                     keyText = targetName;
-                    // 如果是彙總項，例如 '押匯貼現及放款' (但目標可能有很多縮排級別的同名科目)
-                    // 這裡的邏輯是: 如果是彙總項，且其他基金沒有，就用中央銀行的原始縮排，讓 buildTree 決定其階層
-                    // 為了確保押匯貼現及放款是頂級科目，如果其他基金沒有，可以暫時使用 0
-                    if (targetName === '押匯貼現及放款') {
-                         indent = 0; // 暫時給定頂級縮排，讓 buildTree 決定
-                    }
-                    // 否則保持中央銀行的原始縮排
+                    
+                    // 根據目標科目名稱，設定合理的頂層縮排
+                    const targetIndentMap = {
+                        '存放銀行同業': 1, // 流動資產底下的第一層
+                        '採用權益法之投資': 1, // 基金、投資及長期應收款底下的第一層
+                        '存款、匯款及金融債券': 1, // 流動負債底下的第一層
+                        '押匯貼現及放款': 1, // 流動資產底下的第一層
+                        // 其他一般合併項若無其他基金數據，使用 0
+                    };
+
+                    indent = targetIndentMap[targetName] !== undefined ? targetIndentMap[targetName] : 0;
                 }
+                // --- 修正的邏輯結束 ---
             }
 
             const compositeKey = `${keyText}::${indent}`;
