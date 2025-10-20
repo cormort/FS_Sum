@@ -76,6 +76,7 @@ function refreshView() {
     }
 }
 
+// 保持 buildTree/flattenTree 函數定義，以供個別基金模式和 isSummary 標記使用
 class Node {
     constructor(name, indent, data = {}) { this.name = name.trim(); this.indent = indent; this.data = data; this.children = []; }
 }
@@ -236,7 +237,7 @@ function displayAggregated() {
 
         });
         
-        // 3. 建立階層樹以標記 isSummary (同時保護數值)
+        // 3. 建立階層樹以標記 isSummary (結構計算，數值保護)
         const finalDataList = Array.from(ledger.values());
         
         // ★ 核心：保護原始數值 (Preserve Values) ★
