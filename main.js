@@ -162,8 +162,17 @@ function displayAggregated() {
         // 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
-            '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資' },
-            '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
+            '資產負債表_資產': { 
+                '存放銀行業': '存放銀行同業', 
+                '事業投資': '採用權益法之投資', 
+                '其他長期投資': '採用權益法之投資' 
+            },
+            '資產負債表_負債及權益': { 
+                '銀行業存款': '銀行同業存款', 
+                '存款': '存款、匯款及金融債券', 
+                '公庫及政府機關存款': '支票存款', 
+                '儲蓄存款及儲蓄券': '儲蓄存款' 
+            }
         };
         
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
@@ -171,14 +180,13 @@ function displayAggregated() {
         const centralBankOnlyItems = new Set(); 
 
         // 彙總型規則：只處理『融通』，將其合併到『押匯貼現及放款』。
-        // 『銀行業融通』將在後續流程中正常累加到自身。
         if (reportKey === '資產負債表_資產') {
             const targetName = '押匯貼現及放款';
-            ['融通'].forEach(sourceName => { // 僅處理融通
+            ['融通'].forEach(sourceName => { 
                  sourceToTargetMap.set(sourceName, targetName);
-                 centralBankOnlyItems.add(sourceName); // 融通需隱藏
+                 centralBankOnlyItems.add(sourceName); 
             });
-            // 銀行業融通 不再加入 sourceToTargetMap 和 centralBankOnlyItems
+            // 銀行業融通 不再參與特殊合併，正常累加。
         }
         
         // 將 mergeRules 中的來源科目納入 centralBankOnlyItems (單純合併型的來源科目需隱藏)
@@ -191,9 +199,9 @@ function displayAggregated() {
             '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER 
         }[reportKey] || [];
         
-        // 計算公版順序中每個科目的縮排層級
+        // 建立一個簡單的縮排映射，確保目標科目有一個穩定的 compositeKey
         standardOrder.forEach((name) => {
-             // 假設這些目標科目在公版順序中的縮排為 1
+             // 假設這些目標科目在公版順序中的縮排為 1，否則為 0
              orderMap[name] = 1; 
              if (name === '資產' || name === '負債' || name === '權益') {
                  orderMap[name] = 0;
@@ -203,7 +211,6 @@ function displayAggregated() {
         // 確保所有目標科目在 ledger 中以標準縮排存在
         const targetNames = new Set(sourceToTargetMap.values());
         targetNames.forEach(targetName => {
-            // 查找公版順序中該科目的正確縮排，如果找不到則預設為 1 (假設為主要細項)
             const correctIndent = orderMap[targetName] !== undefined ? orderMap[targetName] : 1;
             const compositeKey = `${targetName}::${correctIndent}`;
             
@@ -218,31 +225,34 @@ function displayAggregated() {
             if (!keyText) return;
             let indent = row.indent_level || 0;
             
-            // 檢查是否需要合併到目標科目
+            // 檢查是否為需要合併的來源科目
             if (sourceToTargetMap.has(keyText)) {
                 const targetName = sourceToTargetMap.get(keyText);
                 
-                // 由於我們已經預先建立目標科目，這裡只需要找到它
+                // 由於我們已經預先建立目標科目，使用預設的 correctIndent 來確保唯一 Key
                 const correctIndent = orderMap[targetName] !== undefined ? orderMap[targetName] : 1;
                 const existingTargetKey = `${targetName}::${correctIndent}`;
                 
-                // 如果找到預先建立的目標 key，則使用該 key 進行累加
                 if (ledger.has(existingTargetKey)) {
                     keyText = targetName;
                     indent = correctIndent;
                 } else {
-                    // 如果沒有預先建立 (例如 targetName 不在 orderMap 中)，則回退到使用中央銀行原始的 key/indent
+                    // 如果預先建立邏輯失敗，回退到原始邏輯，以防萬一
                     const existingKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`)) || `${targetName}::${indent}`;
                     keyText = targetName;
                     indent = parseInt(existingKey.split('::')[1]);
                 }
             }
 
+            // 非合併科目（或合併後的目標科目）使用此 key 進行累加
             const compositeKey = `${keyText}::${indent}`;
             if (!ledger.has(compositeKey)) {
+                // 如果是中央銀行獨有的子科目（例如：押匯及貼現），則使用其原始縮排建立新行
                 ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
+            
             const summaryRow = ledger.get(compositeKey);
+            // 確保對所有數值欄位進行累加
             numericCols.forEach(col => {
                 const val = parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
                 summaryRow[col] += val;
@@ -310,7 +320,6 @@ function displayAggregated() {
     initTabs();
     initExportButtons();
 }
-
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
