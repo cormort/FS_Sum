@@ -159,7 +159,7 @@ function displayAggregated() {
             });
         });
 
-// 2. 處理「中央銀行」的數據，並應用例外規則
+        // 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
             '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資' },
@@ -168,20 +168,51 @@ function displayAggregated() {
         
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
-        const centralBankOnlyItems = new Set(); // 儲存中央銀行來源科目，用於稍後隱藏
+        const centralBankOnlyItems = new Set(); 
 
-        // 彙總型規則：將來源科目（如融通、銀行業融通）納入 sourceToTargetMap，指向目標科目 (押匯貼現及放款)
+        // 彙總型規則：只處理『融通』，將其合併到『押匯貼現及放款』。
+        // 『銀行業融通』將在後續流程中正常累加到自身。
         if (reportKey === '資產負債表_資產') {
             const targetName = '押匯貼現及放款';
-            ['融通', '銀行業融通'].forEach(sourceName => {
+            ['融通'].forEach(sourceName => { // 僅處理融通
                  sourceToTargetMap.set(sourceName, targetName);
-                 centralBankOnlyItems.add(sourceName); // 這些來源科目需隱藏
+                 centralBankOnlyItems.add(sourceName); // 融通需隱藏
             });
+            // 銀行業融通 不再加入 sourceToTargetMap 和 centralBankOnlyItems
         }
         
         // 將 mergeRules 中的來源科目納入 centralBankOnlyItems (單純合併型的來源科目需隱藏)
         Object.keys(activeRules).forEach(item => centralBankOnlyItems.add(item));
         
+        // --- 修正核心：預先建立所有合併目標科目，確保它們能進入總表 ---
+        const orderMap = {};
+        const standardOrder = { 
+            '資產負債表_資產': PUBLIC_ASSET_ORDER, 
+            '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER 
+        }[reportKey] || [];
+        
+        // 計算公版順序中每個科目的縮排層級
+        standardOrder.forEach((name) => {
+             // 假設這些目標科目在公版順序中的縮排為 1
+             orderMap[name] = 1; 
+             if (name === '資產' || name === '負債' || name === '權益') {
+                 orderMap[name] = 0;
+             }
+        });
+        
+        // 確保所有目標科目在 ledger 中以標準縮排存在
+        const targetNames = new Set(sourceToTargetMap.values());
+        targetNames.forEach(targetName => {
+            // 查找公版順序中該科目的正確縮排，如果找不到則預設為 1 (假設為主要細項)
+            const correctIndent = orderMap[targetName] !== undefined ? orderMap[targetName] : 1;
+            const compositeKey = `${targetName}::${correctIndent}`;
+            
+            // 如果 ledger 中不存在，則建立一個初始 row
+            if (!ledger.has(compositeKey)) {
+                ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': correctIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+            }
+        });
+
         centralBankData.forEach(row => {
             let keyText = row[keyColumn]?.trim();
             if (!keyText) return;
@@ -191,31 +222,20 @@ function displayAggregated() {
             if (sourceToTargetMap.has(keyText)) {
                 const targetName = sourceToTargetMap.get(keyText);
                 
-                // 查找目標科目在 ledger 中的 key
-                const existingTargetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`));
+                // 由於我們已經預先建立目標科目，這裡只需要找到它
+                const correctIndent = orderMap[targetName] !== undefined ? orderMap[targetName] : 1;
+                const existingTargetKey = `${targetName}::${correctIndent}`;
                 
-                // --- 修正的邏輯：確保合併目標科目有正確的縮排 ---
-                if (existingTargetKey) {
-                    // 如果其他基金或中央銀行自己的數據中已存在該目標科目，則沿用其縮排
+                // 如果找到預先建立的目標 key，則使用該 key 進行累加
+                if (ledger.has(existingTargetKey)) {
                     keyText = targetName;
-                    indent = parseInt(existingTargetKey.split('::')[1]);
+                    indent = correctIndent;
                 } else {
-                    // 如果目標科目不存在，則強制使用一個較低的縮排（例如 0 或 1），
-                    // 讓它能成為頂層科目並被公版順序捕捉到
+                    // 如果沒有預先建立 (例如 targetName 不在 orderMap 中)，則回退到使用中央銀行原始的 key/indent
+                    const existingKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`)) || `${targetName}::${indent}`;
                     keyText = targetName;
-                    
-                    // 根據目標科目名稱，設定合理的頂層縮排
-                    const targetIndentMap = {
-                        '存放銀行同業': 1, // 流動資產底下的第一層
-                        '採用權益法之投資': 1, // 基金、投資及長期應收款底下的第一層
-                        '存款、匯款及金融債券': 1, // 流動負債底下的第一層
-                        '押匯貼現及放款': 1, // 流動資產底下的第一層
-                        // 其他一般合併項若無其他基金數據，使用 0
-                    };
-
-                    indent = targetIndentMap[targetName] !== undefined ? targetIndentMap[targetName] : 0;
+                    indent = parseInt(existingKey.split('::')[1]);
                 }
-                // --- 修正的邏輯結束 ---
             }
 
             const compositeKey = `${keyText}::${indent}`;
@@ -250,21 +270,24 @@ function displayAggregated() {
         const order = standardOrderMap[reportKey] || [];
         const finalRows = [];
         const processedItems = new Set();
-        // 隱藏的來源科目包含單純合併型和彙總型 (融通, 銀行業融通)
+        // 隱藏的來源科目
         const sourceKeysToHide = centralBankOnlyItems;
         
         order.forEach(accountName => {
-            if (sourceKeysToHide.has(accountName)) return; // 隱藏被合併的來源科目
+            if (sourceKeysToHide.has(accountName)) return; 
             const matchingRows = finalRowsWithHierarchy.filter(row => row[keyColumn] === accountName);
             if (matchingRows.length > 0) {
                  matchingRows.sort((a,b) => a.indent_level - b.indent_level);
                  matchingRows.forEach(row => {
-                    row['基金名稱'] = '所有基金加總';
-                    if (selectedFundType === 'business') {
-                        numericCols.forEach(col => row[col] = Math.round(row[col]));
+                    // 再次過濾，確保該項目沒有被作為來源科目隱藏
+                    if (!sourceKeysToHide.has(row[keyColumn])) {
+                       row['基金名稱'] = '所有基金加總';
+                       if (selectedFundType === 'business') {
+                           numericCols.forEach(col => row[col] = Math.round(row[col]));
+                       }
+                       finalRows.push(row);
+                       processedItems.add(`${row[keyColumn]}::${row.indent_level}`);
                     }
-                    finalRows.push(row);
-                    processedItems.add(`${row[keyColumn]}::${row.indent_level}`);
                  });
             }
         });
