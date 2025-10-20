@@ -159,6 +159,13 @@ function displayAggregated() {
             });
         });
 
+        // Helper: 查找 ledger 中是否存在該名稱的科目，並返回其縮排
+        const getExistingIndent = (name) => {
+            const existingKey = [...ledger.keys()].find(k => k.startsWith(`${name}::`));
+            return existingKey ? parseInt(existingKey.split('::')[1]) : null;
+        };
+
+
         // 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
@@ -205,26 +212,34 @@ function displayAggregated() {
             if (sourceToTargetMap.has(keyText)) {
                 targetName = sourceToTargetMap.get(keyText);
                 
-                // 查找其他基金中是否存在目標科目，以確保縮排一致性
-                const existingTargetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`)); 
+                // 處理例外合併的目標科目：優先使用其他基金已存在的縮排
+                const existingTargetIndent = getExistingIndent(targetName); 
                 
-                if (existingTargetKey) {
-                    // 使用現有目標科目的名稱和縮排
-                    targetIndent = parseInt(existingTargetKey.split('::')[1]);
+                if (existingTargetIndent !== null) {
+                    targetIndent = existingTargetIndent;
                 } else {
-                    // 如果其他基金中不存在，則保留中央銀行數據的原始縮排 
-                    targetIndent = indent;
+                    targetIndent = indent; // 如果沒有，就用中央銀行的原始縮排
                 }
+            } else {
+                // 處理非合併的正常/父級科目 (關鍵修正點)
+                const existingIndent = getExistingIndent(keyText);
+                
+                // 如果該科目已存在於 ledger (來自其他基金)，強制使用該縮排以避免數據分散
+                if (existingIndent !== null) {
+                    targetIndent = existingIndent;
+                }
+                // 否則，使用中央銀行數據的原始縮排 (targetIndent = indent)
             }
 
             // A. 處理合併後的目標科目 / 正常科目
             const compositeKey = `${targetName}::${targetIndent}`;
             if (!ledger.has(compositeKey)) {
+                // 如果是新科目，就用計算好的 targetIndent 建立
                 ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
             
             const summaryRow = ledger.get(compositeKey);
-            // 累加數值到目標/正常科目
+            // 累加數值到目標/正常科目。因為我們保證了縮排一致性，累加就會正確。
             numericCols.forEach(col => {
                 summaryRow[col] += originalRowValue[col];
             });
@@ -235,13 +250,10 @@ function displayAggregated() {
         const finalDataList = Array.from(ledger.values());
         const tempTree = buildTree(finalDataList, keyColumn, numericCols);
         
-        // ★ 核心修正：移除所有樹狀數值計算，確保所有層級科目數值都來自 ledger 中的直接累加。 ★
-        // 舊的 recalculateTreeLimited 及其調用已經被移除。
-        
+        // 4. 按公版順序排序
         const finalRowsWithHierarchy = [];
         flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
         
-        // 4. 按公版順序排序
         const standardOrderMap = { '損益表': PROFIT_LOSS_ACCOUNT_ORDER, '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER, '現金流量表': CASH_FLOW_ACCOUNT_ORDER, '資產負債表_資產': PUBLIC_ASSET_ORDER, '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER };
         const order = standardOrderMap[reportKey] || [];
         const finalRows = [];
@@ -255,7 +267,7 @@ function displayAggregated() {
             if (matchingRows.length > 0) {
                  matchingRows.sort((a,b) => a.indent_level - b.indent_level);
                  matchingRows.forEach(row => {
-                    // 再次過濾，確保該項目沒有被作為來源科目隱藏
+                    // 確保該項目沒有被作為來源科目隱藏
                     if (!sourceKeysToHide.has(row[keyColumn])) {
                        row['基金名稱'] = '所有基金加總';
                        if (selectedFundType === 'business') {
@@ -268,7 +280,7 @@ function displayAggregated() {
             }
         });
 
-        // ★ 核心修正：將不在公版中的項目也加回來
+        // 將不在公版中的項目也加回來
         finalRowsWithHierarchy.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
             if (!processedItems.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
