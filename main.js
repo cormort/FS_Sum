@@ -176,34 +176,27 @@ function displayAggregated() {
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
         
-        // ★ 核心修正：移除 centralBankOnlyItems 填充邏輯，實現完全顯示 ★
-
-        // 彙總型規則：記錄中央銀行的來源科目，但不再用於過濾
+        // 彙總型規則：記錄中央銀行的來源科目
         const summaryRuleTargets = new Map();
         for (const targetName in summaryRuleSources) {
             summaryRuleSources[targetName].forEach(sourceName => {
                 sourceToTargetMap.set(sourceName, targetName);
-                // centralBankOnlyItems.add(sourceName); // 移除過濾
             });
             summaryRuleTargets.set(targetName, summaryRuleSources[targetName]);
         }
                 
-        // Object.keys(activeRules).forEach(item => centralBankOnlyItems.add(item)); // 移除過濾
-        
-        // 為了排序和處理方便，我們仍然需要知道哪些是源頭科目
-        const sourceKeysToHide = new Set([...Object.keys(activeRules), ...Object.values(summaryRuleSources).flat()]); 
-
-
         // 建立公版彙總科目列表 (用於判斷是否為父級科目)
         const publicHierarchyMap = {};
         const allOrders = [...PUBLIC_ASSET_ORDER, ...PUBLIC_LIABILITY_ORDER];
         allOrders.forEach(name => {
-            // 簡單判斷：如果科目名稱大寫或包含「資產」「負債」「權益」「合　　計」則為彙總層級
              if (name.length > 2 && name === name.toUpperCase().trim() || name.includes('資產') || name.includes('負債') || name.includes('權益') || name.includes('合　　計')) {
                  publicHierarchyMap[name] = true;
              }
         });
-                
+
+        // 建立需要被隱藏的來源科目集合 (單獨為雙重累加模式設置)
+        const sourceKeysToHide = new Set();
+        
         centralBankData.forEach(row => {
             let keyText = row[keyColumn]?.trim();
             if (!keyText) return;
@@ -230,6 +223,11 @@ function displayAggregated() {
                 numericCols.forEach(col => {
                     originalSummaryRow[col] += originalRowValue[col];
                 });
+                
+                // ★ 關鍵修正：將原始科目加入隱藏列表 (因為最終只需要公版科目)
+                // 根據您最新的要求：最終輸出只留下公版科目，所以原始科目必須被隱藏。
+                sourceKeysToHide.add(keyText);
+
 
                 // ACCUMULATION 2: 目標科目 (Target) 額外累加來源數值
                 const existingTargetIndent = getExistingIndent(targetName); 
@@ -316,11 +314,10 @@ function displayAggregated() {
         const order = standardOrderMap[reportKey] || [];
         const finalRows = [];
         const processedItems = new Set();
-        // 隱藏的來源科目 (此處不應該再有 filtering)
-        const sourceKeysToHide = new Set(); // 故意清空，不進行過濾
         
         // 從公版順序開始，逐一查找並添加科目
         order.forEach(accountName => {
+            // 由於目標是只留下公版科目，我們在 order.forEach 開始就檢查
             if (sourceKeysToHide.has(accountName)) return; 
             
             // 查找所有名稱匹配的行 (不同縮排)
@@ -345,11 +342,10 @@ function displayAggregated() {
             }
         });
 
-        // 將不在公版中的項目也加回來
+        // 將不在公版中的項目也加回來 (但要排除被隱藏的來源科目)
         finalRowsWithHierarchy.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            // 由於 sourceKeysToHide 已經清空，這裡只檢查是否已處理過
-            if (!processedItems.has(compositeKey)) {
+            if (!processedItems.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
                 row['基金名稱'] = '所有基金加總';
                 if (selectedFundType === 'business') {
                     numericCols.forEach(col => row[col] = Math.round(row[col]));
