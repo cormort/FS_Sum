@@ -154,10 +154,13 @@ function displayAggregated() {
             }
             const summaryRow = ledger.get(compositeKey);
             numericCols.forEach(col => {
-                summaryRow[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
+                // 使用 Number() 和 replace(/,/g, '') 確保正確解析數值
+                const val = parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
+                summaryRow[col] += val;
             });
         });
 
+        // --- 修正開始 ---
         // 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
@@ -167,28 +170,44 @@ function displayAggregated() {
         const summaryRuleSources = { '押匯貼現及放款': ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] };
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
+        const centralBankOnlyItems = new Set(); // 儲存中央銀行來源科目，用於稍後隱藏
 
-        // 彙總型規則：先將目標科目的「其他基金」總值清零
-        for (const targetName in summaryRuleSources) {
-            const targetKeys = [...ledger.keys()].filter(k => k.startsWith(`${targetName}::`));
-            if (targetKeys.length > 0) {
-                targetKeys.forEach(key => {
-                    const targetRow = ledger.get(key);
-                    if(targetRow) numericCols.forEach(col => targetRow[col] = 0);
-                });
-                summaryRuleSources[targetName].forEach(sourceName => sourceToTargetMap.set(sourceName, targetName));
-            }
-        }
+        // 處理彙總型規則
+        const summaryRuleTargetNames = Object.keys(summaryRuleSources);
+        summaryRuleTargetNames.forEach(targetName => {
+            summaryRuleSources[targetName].forEach(sourceName => {
+                sourceToTargetMap.set(sourceName, targetName);
+                centralBankOnlyItems.add(sourceName); // 彙總型規則的來源科目需隱藏
+            });
+            // 由於彙總型規則是針對所有基金的子科目，在計算階層樹時會自動加總，這裡不用特別處理。
+        });
         
+        // 記錄所有被合併的中央銀行專屬科目 (單一合併型規則)
+        Object.keys(activeRules).forEach(item => centralBankOnlyItems.add(item));
+
         centralBankData.forEach(row => {
             let keyText = row[keyColumn]?.trim();
             if (!keyText) return;
             let indent = row.indent_level || 0;
+            
+            // 檢查是否需要合併到目標科目
             if (sourceToTargetMap.has(keyText)) {
                 const targetName = sourceToTargetMap.get(keyText);
-                const targetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`)) || `${targetName}::${indent}`;
-                keyText = targetName;
-                indent = parseInt(targetKey.split('::')[1]);
+                
+                // 找到或建立目標科目在 ledger 中的 Key
+                // 優先使用其他基金已存在的縮排，否則使用中央銀行的縮排
+                const existingTargetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`));
+                if (existingTargetKey) {
+                    keyText = targetName;
+                    indent = parseInt(existingTargetKey.split('::')[1]);
+                } else {
+                    keyText = targetName;
+                    // 使用中央銀行數據的縮排，如果目標是彙總型規則的項目，其縮排應為 0
+                    if (summaryRuleTargetNames.includes(targetName)) {
+                        indent = 0;
+                    }
+                    // 否則保持中央銀行的原始縮排
+                }
             }
 
             const compositeKey = `${keyText}::${indent}`;
@@ -197,17 +216,25 @@ function displayAggregated() {
             }
             const summaryRow = ledger.get(compositeKey);
             numericCols.forEach(col => {
-                summaryRow[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
+                const val = parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
+                summaryRow[col] += val;
             });
         });
-
+        // --- 修正結束 ---
+        
         // 3. 建立階層樹以標記 isSummary
         const finalDataList = Array.from(ledger.values());
         const tempTree = buildTree(finalDataList, keyColumn, numericCols);
         
         function recalculateTree(node) {
             if (!node.children || node.children.length === 0) return;
+            // 先遞迴處理子節點
             node.children.forEach(child => recalculateTree(child));
+            
+             // 只有當此節點在公版順序中是總和項目時，才需要重新計算 (如果需要，可在此處加入更細緻的判斷)
+             // 由於 buildTree 和 flattenTree 會自動處理 isSummary，這裡保持原始邏輯。
+             
+             // 重新計算父節點的數值 (因為中央銀行的數據可能已改變子項目的值)
              numericCols.forEach(col => {
                node.data[col] = node.children.reduce((sum, child) => sum + (child.data[col] || 0), 0);
             });
@@ -222,12 +249,14 @@ function displayAggregated() {
         const order = standardOrderMap[reportKey] || [];
         const finalRows = [];
         const processedItems = new Set();
-        const sourceKeysToHide = new Set(Object.keys(activeRules));
+        // 將 centralBankOnlyItems 納入隱藏項目
+        const sourceKeysToHide = new Set([...Object.keys(activeRules), ...centralBankOnlyItems]);
         
         order.forEach(accountName => {
             if (sourceKeysToHide.has(accountName)) return;
             const matchingRows = finalRowsWithHierarchy.filter(row => row[keyColumn] === accountName);
             if (matchingRows.length > 0) {
+                 // 確保縮排層級正確排序
                  matchingRows.sort((a,b) => a.indent_level - b.indent_level);
                  matchingRows.forEach(row => {
                     row['基金名稱'] = '所有基金加總';
@@ -258,7 +287,6 @@ function displayAggregated() {
     initTabs();
     initExportButtons();
 }
-
 function displayComparison() {
     const dynamicControlsContainer = document.getElementById('dynamic-controls');
     let optionsHtml = '';
