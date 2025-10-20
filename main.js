@@ -86,7 +86,6 @@ function buildTree(records, keyColumn, numericCols) {
         const name = record[keyColumn]?.trim();
         if (!name) return;
         const indent = record.indent_level || 0;
-        // 這裡 buildTree 創建的 node.data 數值會被覆蓋，這是正常的，因為我們會在之後還原。
         const data = { '基金名稱': record['基金名稱'] }; 
         numericCols.forEach(col => { data[col] = parseFloat(String(record[col] || '0').replace(/,/g, '')) || 0; });
         const node = new Node(name, indent, data);
@@ -98,7 +97,6 @@ function buildTree(records, keyColumn, numericCols) {
 }
 function flattenTree(node, result, keyColumn) {
     if (node.name !== 'Root') {
-        // isSummary 的判斷是 buildTree 的副作用
         const row = { ...node.data, [keyColumn]: node.name, 'indent_level': node.indent, 'isSummary': node.children.length > 0 };
         result.push(row);
     }
@@ -163,7 +161,6 @@ function displayAggregated() {
 
         // Helper: 查找 ledger 中是否存在該名稱的科目，並返回其縮排
         const getExistingIndent = (name) => {
-            // 查找所有名稱匹配的 key，返回第一個找到的縮排
             const existingKey = [...ledger.keys()].find(k => k.startsWith(`${name}::`));
             return existingKey ? parseInt(existingKey.split('::')[1]) : null;
         };
@@ -215,7 +212,7 @@ function displayAggregated() {
                     targetIndent = indent; // 如果沒有，就用中央銀行的原始縮排
                 }
             } else {
-                // 處理非合併的正常/父級科目 (關鍵修正點)
+                // 處理非合併的正常/父級科目
                 const existingIndent = getExistingIndent(keyText);
                 
                 // 如果該科目已存在於 ledger (來自其他基金)，強制使用該縮排以避免數據分散
@@ -239,55 +236,6 @@ function displayAggregated() {
 
         });
         
-        // ★ 核心修正 2.5：強制例外目標科目使用正確的結構縮排 ★
-        // 這確保了中央銀行合併後的科目不會因為縮排錯誤而無法被 buildTree 或公版順序捕捉。
-        const exceptionTargetIndents = {
-             '存放銀行同業': 1, // 資產負債表_資產
-             '採用權益法之投資': 1, // 資產負債表_資產
-             '存款、匯款及金融債券': 1, // 資產負債表_負債及權益
-             '銀行同業存款': 1, // 資產負債表_負債及權益
-             '支票存款': 1, // 資產負債表_負債及權益
-             '儲蓄存款': 1, // 資產負債表_負債及權益
-             '押匯貼現及放款': 1, // 資產負債表_資產
-             '採用權益法認列之關聯企業及合資利益之份額': 1, // 損益表
-             '採用權益法認列之關聯企業及合資損失之份額': 1  // 損益表
-        };
-        
-        const allTargetNames = new Set([...Object.values(activeRules), ...Object.keys(summaryRuleSources)]);
-
-        allTargetNames.forEach(targetName => {
-            const targetIndent = exceptionTargetIndents[targetName];
-            if (targetIndent !== undefined) {
-                // 查找所有該名稱的 ledger key
-                const keysToUpdate = [...ledger.keys()].filter(k => k.startsWith(`${targetName}::`));
-                
-                keysToUpdate.forEach(oldCompositeKey => {
-                    const row = ledger.get(oldCompositeKey);
-                    
-                    if (row && row.indent_level !== targetIndent) {
-                        // 1. 儲存數值並移除舊的錯誤縮排 entry
-                        const rowValues = { ...row };
-                        ledger.delete(oldCompositeKey);
-                        
-                        // 2. 創建新的正確縮排 key
-                        const newCompositeKey = `${targetName}::${targetIndent}`;
-                        
-                        // 3. 更新或合併到新 key
-                        if (ledger.has(newCompositeKey)) {
-                             // 如果新的正確 key 已經存在（例如其他基金已經創建），則合併數值
-                             const existingRow = ledger.get(newCompositeKey);
-                             numericCols.forEach(col => { existingRow[col] += rowValues[col]; });
-                        } else {
-                             // 否則，將數據移到新 key
-                             row.indent_level = targetIndent;
-                             ledger.set(newCompositeKey, row);
-                        }
-                    }
-                });
-            }
-        });
-
-
         // 3. 建立階層樹以標記 isSummary (同時保護數值)
         const finalDataList = Array.from(ledger.values());
         
