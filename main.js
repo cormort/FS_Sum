@@ -175,20 +175,24 @@ function displayAggregated() {
         const summaryRuleSources = { '押匯貼現及放款': ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] };
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
-        const centralBankOnlyItems = new Set();
+        
+        // ★ 核心修正：移除 centralBankOnlyItems 填充邏輯，實現完全顯示 ★
 
-        // 彙總型規則：記錄中央銀行的來源科目，稍後不顯示
+        // 彙總型規則：記錄中央銀行的來源科目，但不再用於過濾
         const summaryRuleTargets = new Map();
         for (const targetName in summaryRuleSources) {
             summaryRuleSources[targetName].forEach(sourceName => {
                 sourceToTargetMap.set(sourceName, targetName);
-                centralBankOnlyItems.add(sourceName);
+                // centralBankOnlyItems.add(sourceName); // 移除過濾
             });
             summaryRuleTargets.set(targetName, summaryRuleSources[targetName]);
         }
                 
-        // 記錄所有被合併的中央銀行專屬科目
-        Object.keys(activeRules).forEach(item => centralBankOnlyItems.add(item));
+        // Object.keys(activeRules).forEach(item => centralBankOnlyItems.add(item)); // 移除過濾
+        
+        // 為了排序和處理方便，我們仍然需要知道哪些是源頭科目
+        const sourceKeysToHide = new Set([...Object.keys(activeRules), ...Object.values(summaryRuleSources).flat()]); 
+
 
         // 建立公版彙總科目列表 (用於判斷是否為父級科目)
         const publicHierarchyMap = {};
@@ -213,14 +217,41 @@ function displayAggregated() {
             if (sourceToTargetMap.has(keyText)) {
                 targetName = sourceToTargetMap.get(keyText);
                 
-                // 優先使用其他基金已存在的縮排
-                const existingTargetIndent = getExistingIndent(targetName); 
+                // --- 雙重累加邏輯 ---
+
+                // ACCUMULATION 1: 原始科目 (Source) 保持並累加其數值
+                const originalCompositeKey = `${keyText}::${indent}`;
+                const isOriginalSummary = publicHierarchyMap[keyText] || false; 
                 
+                if (!ledger.has(originalCompositeKey)) {
+                    ledger.set(originalCompositeKey, { [keyColumn]: keyText, 'indent_level': indent, 'isSummary': isOriginalSummary, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                }
+                const originalSummaryRow = ledger.get(originalCompositeKey);
+                numericCols.forEach(col => {
+                    originalSummaryRow[col] += originalRowValue[col];
+                });
+
+                // ACCUMULATION 2: 目標科目 (Target) 額外累加來源數值
+                const existingTargetIndent = getExistingIndent(targetName); 
                 if (existingTargetIndent !== null) {
                     targetIndent = existingTargetIndent;
                 } else {
                     targetIndent = indent; // 如果沒有，就用中央銀行的原始縮排
                 }
+
+                const targetCompositeKey = `${targetName}::${targetIndent}`;
+                const isTargetSummary = publicHierarchyMap[targetName] || false;
+                
+                if (!ledger.has(targetCompositeKey)) {
+                    ledger.set(targetCompositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, 'isSummary': isTargetSummary, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                }
+                const targetSummaryRow = ledger.get(targetCompositeKey);
+                numericCols.forEach(col => {
+                    targetSummaryRow[col] += originalRowValue[col];
+                });
+
+                // 繼續到下一個 row，不執行後續的單次累加
+                return;
             } else {
                 // 處理非合併的正常/父級科目
                 const existingIndent = getExistingIndent(keyText);
@@ -232,10 +263,8 @@ function displayAggregated() {
                 // 否則，使用中央銀行數據的原始縮排 (targetIndent = indent)
             }
 
-            // A. 處理合併後的目標科目 / 正常科目
+            // B. 處理非合併的正常科目 (單次累加，與其他基金邏輯一致)
             const compositeKey = `${targetName}::${targetIndent}`;
-            
-            // 判斷是否為彙總科目 (isSummary)，用於初始化 Ledger
             const isSummary = publicHierarchyMap[targetName] || false;
             
             if (!ledger.has(compositeKey)) {
@@ -263,7 +292,6 @@ function displayAggregated() {
         });
 
         // 運行 buildTree 來產生準確的階層結構（children 屬性）
-        // 目的：1. 解決縮排不連續問題 2. 獲取準確的 isSummary 標籤
         const tempTree = buildTree(finalDataList, keyColumn, numericCols); 
         
         // 運行 flattenTree 來生成包含 isSummary 標籤的列表
@@ -288,8 +316,8 @@ function displayAggregated() {
         const order = standardOrderMap[reportKey] || [];
         const finalRows = [];
         const processedItems = new Set();
-        // 隱藏的來源科目
-        const sourceKeysToHide = centralBankOnlyItems;
+        // 隱藏的來源科目 (此處不應該再有 filtering)
+        const sourceKeysToHide = new Set(); // 故意清空，不進行過濾
         
         // 從公版順序開始，逐一查找並添加科目
         order.forEach(accountName => {
@@ -320,7 +348,8 @@ function displayAggregated() {
         // 將不在公版中的項目也加回來
         finalRowsWithHierarchy.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            if (!processedItems.has(compositeKey) && !sourceKeysToHide.has(row[keyColumn])) {
+            // 由於 sourceKeysToHide 已經清空，這裡只檢查是否已處理過
+            if (!processedItems.has(compositeKey)) {
                 row['基金名稱'] = '所有基金加總';
                 if (selectedFundType === 'business') {
                     numericCols.forEach(col => row[col] = Math.round(row[col]));
