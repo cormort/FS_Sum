@@ -239,11 +239,59 @@ function displayAggregated() {
 
         });
         
+        // ★ 核心修正 2.5：強制例外目標科目使用正確的結構縮排 ★
+        // 這確保了中央銀行合併後的科目不會因為縮排錯誤而無法被 buildTree 或公版順序捕捉。
+        const exceptionTargetIndents = {
+             '存放銀行同業': 1, // 資產負債表_資產
+             '採用權益法之投資': 1, // 資產負債表_資產
+             '存款、匯款及金融債券': 1, // 資產負債表_負債及權益
+             '銀行同業存款': 1, // 資產負債表_負債及權益
+             '支票存款': 1, // 資產負債表_負債及權益
+             '儲蓄存款': 1, // 資產負債表_負債及權益
+             '押匯貼現及放款': 1, // 資產負債表_資產
+             '採用權益法認列之關聯企業及合資利益之份額': 1, // 損益表
+             '採用權益法認列之關聯企業及合資損失之份額': 1  // 損益表
+        };
+        
+        const allTargetNames = new Set([...Object.values(activeRules), ...Object.keys(summaryRuleSources)]);
+
+        allTargetNames.forEach(targetName => {
+            const targetIndent = exceptionTargetIndents[targetName];
+            if (targetIndent !== undefined) {
+                // 查找所有該名稱的 ledger key
+                const keysToUpdate = [...ledger.keys()].filter(k => k.startsWith(`${targetName}::`));
+                
+                keysToUpdate.forEach(oldCompositeKey => {
+                    const row = ledger.get(oldCompositeKey);
+                    
+                    if (row && row.indent_level !== targetIndent) {
+                        // 1. 儲存數值並移除舊的錯誤縮排 entry
+                        const rowValues = { ...row };
+                        ledger.delete(oldCompositeKey);
+                        
+                        // 2. 創建新的正確縮排 key
+                        const newCompositeKey = `${targetName}::${targetIndent}`;
+                        
+                        // 3. 更新或合併到新 key
+                        if (ledger.has(newCompositeKey)) {
+                             // 如果新的正確 key 已經存在（例如其他基金已經創建），則合併數值
+                             const existingRow = ledger.get(newCompositeKey);
+                             numericCols.forEach(col => { existingRow[col] += rowValues[col]; });
+                        } else {
+                             // 否則，將數據移到新 key
+                             row.indent_level = targetIndent;
+                             ledger.set(newCompositeKey, row);
+                        }
+                    }
+                });
+            }
+        });
+
+
         // 3. 建立階層樹以標記 isSummary (同時保護數值)
         const finalDataList = Array.from(ledger.values());
         
         // ★ 核心：保護原始數值 (Preserve Values) ★
-        // 複製 ledger 中的最終累加數值
         const preservedValues = new Map();
         finalDataList.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
