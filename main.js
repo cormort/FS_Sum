@@ -162,69 +162,81 @@ function displayAggregated() {
         // 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
-            '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資' },
-            '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
+            '資產負債表_資產': { 
+                '存放銀行業': '存放銀行同業', 
+                '事業投資': '採用權益法之投資', 
+                '其他長期投資': '採用權益法之投資' 
+            },
+            '資產負債表_負債及權益': { 
+                '銀行業存款': '銀行同業存款', 
+                '存款': '存款、匯款及金融債券', 
+                '公庫及政府機關存款': '支票存款', 
+                '儲蓄存款及儲蓄券': '儲蓄存款' 
+            }
         };
-        const summaryRuleSources = { '押匯貼現及放款': ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] };
+        
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
-        const centralBankOnlyItems = new Set();
-        
-        // 彙總型規則：記錄中央銀行的來源科目，稍後不顯示
-        const summaryRuleTargets = new Map();
-        for (const targetName in summaryRuleSources) {
-            summaryRuleSources[targetName].forEach(sourceName => {
-                sourceToTargetMap.set(sourceName, targetName);
-                centralBankOnlyItems.add(sourceName);
+        const centralBankOnlyItems = new Set(); 
+
+        // 彙總型規則：只處理『融通』，將其合併到『押匯貼現及放款』。
+        if (reportKey === '資產負債表_資產') {
+            const targetName = '押匯貼現及放款';
+            ['融通'].forEach(sourceName => { 
+                 sourceToTargetMap.set(sourceName, targetName);
+                 centralBankOnlyItems.add(sourceName); 
             });
-            summaryRuleTargets.set(targetName, summaryRuleSources[targetName]);
         }
-                
-        // 記錄所有被合併的中央銀行專屬科目
+        
+        // 將 mergeRules 中的來源科目納入 centralBankOnlyItems (所有來源科目都隱藏)
         Object.keys(activeRules).forEach(item => centralBankOnlyItems.add(item));
-                
+        
+        
         centralBankData.forEach(row => {
             let keyText = row[keyColumn]?.trim();
             if (!keyText) return;
             let indent = row.indent_level || 0;
-                        
-            // 檢查是否需要合併到目標科目
+            const originalRowValue = Object.fromEntries(numericCols.map(col => [col, parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0]));
+
+            let targetName = keyText;
+            let targetIndent = indent;
+            
+            // 檢查是否為需要合併的來源科目
             if (sourceToTargetMap.has(keyText)) {
-                const targetName = sourceToTargetMap.get(keyText);
+                targetName = sourceToTargetMap.get(keyText);
                 
-                // 查找 ledger 中是否已存在該目標科目，以確保縮排一致性
-                const targetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`));
+                // 查找其他基金中是否存在目標科目，以確保縮排一致性
+                const existingTargetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`)); 
                 
-                if (targetKey) {
+                if (existingTargetKey) {
                     // 使用現有目標科目的名稱和縮排
-                    keyText = targetName;
-                    indent = parseInt(targetKey.split('::')[1]);
+                    targetIndent = parseInt(existingTargetKey.split('::')[1]);
                 } else {
-                    // 如果其他基金中不存在，則使用目標名稱，並保留中央銀行數據的原始縮排 
-                    keyText = targetName;
-                    // indent 保持為 row.indent_level
+                    // 如果其他基金中不存在，則保留中央銀行數據的原始縮排 
+                    targetIndent = indent;
                 }
             }
-            
-            // 非合併科目（或合併後的目標科目）使用此 key 進行累加
-            const compositeKey = `${keyText}::${indent}`;
+
+            // A. 處理合併後的目標科目 / 正常科目
+            const compositeKey = `${targetName}::${targetIndent}`;
             if (!ledger.has(compositeKey)) {
-                ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
             
             const summaryRow = ledger.get(compositeKey);
-            // 確保對所有數值欄位進行累加
+            // 累加數值到目標/正常科目
             numericCols.forEach(col => {
-                const val = parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
-                summaryRow[col] += val;
+                summaryRow[col] += originalRowValue[col];
             });
-        });
 
+        });
+        
         // 3. 建立階層樹以標記 isSummary
         const finalDataList = Array.from(ledger.values());
         const tempTree = buildTree(finalDataList, keyColumn, numericCols);
         
-        // ★ 移除 recalculateTree 及其相關邏輯，保留直接累加的數值 ★
+        // ★ 核心修正：移除所有樹狀數值計算，確保所有層級科目數值都來自 ledger 中的直接累加。 ★
+        // 舊的 recalculateTreeLimited 及其調用已經被移除。
         
         const finalRowsWithHierarchy = [];
         flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
@@ -247,8 +259,6 @@ function displayAggregated() {
                     if (!sourceKeysToHide.has(row[keyColumn])) {
                        row['基金名稱'] = '所有基金加總';
                        if (selectedFundType === 'business') {
-                           // 由於我們移除了 recalculateTree，這裡的父科目數值可能不是子科目總和，
-                           // 但它是正確的（直接累加）。我們保留這一行的數值處理。
                            numericCols.forEach(col => row[col] = Math.round(row[col]));
                        }
                        finalRows.push(row);
