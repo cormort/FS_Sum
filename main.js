@@ -144,6 +144,7 @@ function displayAggregated() {
         const ledger = new Map();
 
         // 1. 先加總所有「其他基金」
+        // 為了確保後續中央銀行科目能正確匹配縮排，這裡優先使用其他基金已存在的縮排
         otherFundsData.forEach(row => {
             const keyText = row[keyColumn]?.trim();
             if (!keyText) return;
@@ -159,13 +160,20 @@ function displayAggregated() {
             });
         });
 
-        // 2. 處理「中央銀行」的數據，並應用例外規則 (使用用戶提供的邏輯)
+        // Helper: 查找 ledger 中是否存在該名稱的科目，並返回其縮排
+        const getExistingIndent = (name) => {
+            const existingKey = [...ledger.keys()].find(k => k.startsWith(`${name}::`));
+            return existingKey ? parseInt(existingKey.split('::')[1]) : null;
+        };
+
+
+        // 2. 處理「中央銀行」的數據，並應用例外規則
         const mergeRules = {
             '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
             '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資' },
             '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
         };
-        const summaryRuleSources = { '押匯貼現及放款': ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] };
+        const summaryRuleSources = { '押匯貼現及放款': ['融通', '銀行業融通', '押匯及貼現', '短期放款及透支', '短期擔保放款及透透支', '中期放款', '中期擔保放款', '長期放款', '長期擔保放款'] };
         const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
         const sourceToTargetMap = new Map(Object.entries(activeRules));
         const centralBankOnlyItems = new Set();
@@ -187,63 +195,56 @@ function displayAggregated() {
             let keyText = row[keyColumn]?.trim();
             if (!keyText) return;
             let indent = row.indent_level || 0;
+            const originalRowValue = Object.fromEntries(numericCols.map(col => [col, parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0]));
+
+            let targetName = keyText;
+            let targetIndent = indent;
             
-            // 檢查是否需要合併到目標科目
+            // 檢查是否為需要合併的來源科目
             if (sourceToTargetMap.has(keyText)) {
-                const targetName = sourceToTargetMap.get(keyText);
+                targetName = sourceToTargetMap.get(keyText);
                 
-                // 查找 ledger 中已存在的目標科目，如果存在，則強制使用該縮排
-                const existingTargetKey = [...ledger.keys()].find(k => k.startsWith(`${targetName}::`));
+                // 對於合併的目標科目，查找其他基金中是否存在，如果存在，則強制使用該縮排
+                const existingTargetIndent = getExistingIndent(targetName); 
                 
-                if (existingTargetKey) {
-                    // 使用現有目標科目的名稱和縮排
-                    keyText = targetName;
-                    indent = parseInt(existingTargetKey.split('::')[1]);
+                if (existingTargetIndent !== null) {
+                    targetIndent = existingTargetIndent;
                 } else {
-                    // 如果不存在，則使用目標名稱和中央銀行原始縮排
-                    keyText = targetName;
-                    // indent 保持為 row.indent_level
+                    targetIndent = indent; // 如果沒有，就用中央銀行的原始縮排
                 }
+            } else {
+                // 處理非合併的正常/父級科目
+                const existingIndent = getExistingIndent(keyText);
+                
+                // 如果該科目已存在於 ledger (來自其他基金)，強制使用該縮排以避免數據分散
+                if (existingIndent !== null) {
+                    targetIndent = existingIndent;
+                }
+                // 否則，使用中央銀行數據的原始縮排 (targetIndent = indent)
             }
 
-            const compositeKey = `${keyText}::${indent}`;
+            // A. 處理合併後的目標科目 / 正常科目
+            const compositeKey = `${targetName}::${targetIndent}`;
             if (!ledger.has(compositeKey)) {
-                ledger.set(compositeKey, { [keyColumn]: keyText, 'indent_level': indent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                // 如果是新科目，就用計算好的 targetIndent 建立
+                ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
+            
             const summaryRow = ledger.get(compositeKey);
+            // 累加數值到目標/正常科目。
             numericCols.forEach(col => {
-                summaryRow[col] += parseFloat(String(row[col] || '0').replace(/,/g, '')) || 0;
+                summaryRow[col] += originalRowValue[col];
             });
-        });
-        
-        // 3. 建立階層樹以標記 isSummary
-        const finalDataList = Array.from(ledger.values());
-        
-        // ★ 核心：保護原始數值 (Preserve Values) ★
-        const preservedValues = new Map();
-        finalDataList.forEach(row => {
-            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            const data = {};
-            numericCols.forEach(col => { data[col] = row[col]; });
-            preservedValues.set(compositeKey, data);
-        });
 
-        const tempTree = buildTree(finalDataList, keyColumn, numericCols);
-        
-        const finalRowsWithHierarchy = [];
-        flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
-        
-        // ★ 核心：還原原始數值 (Restore Values) ★
-        finalRowsWithHierarchy.forEach(row => {
-            const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            const originalData = preservedValues.get(compositeKey);
-            if (originalData) {
-                numericCols.forEach(col => {
-                    // 覆蓋 flattenTree 帶出來的舊數值
-                    row[col] = originalData[col];
-                });
-            }
         });
+        
+        // 3. 準備最終輸出：從 ledger 轉換為可排序的列表
+        const finalRowsWithHierarchy = Array.from(ledger.values()).map(row => ({
+            ...row,
+            // 由於我們移除了 buildTree/flattenTree，需要手動判斷 isSummary，
+            // 簡單方式是檢查它是否為公版中的彙總節點
+            'isSummary': row['indent_level'] < 2 || row[keyColumn].includes('合計') 
+        }));
         
         // 4. 按公版順序排序
         const standardOrderMap = { '損益表': PROFIT_LOSS_ACCOUNT_ORDER, '盈虧撥補表': APPROPRIATION_ACCOUNT_ORDER, '現金流量表': CASH_FLOW_ACCOUNT_ORDER, '資產負債表_資產': PUBLIC_ASSET_ORDER, '資產負債表_負債及權益': PUBLIC_LIABILITY_ORDER };
@@ -253,20 +254,26 @@ function displayAggregated() {
         // 隱藏的來源科目
         const sourceKeysToHide = centralBankOnlyItems;
         
+        // 從公版順序開始，逐一查找並添加科目
         order.forEach(accountName => {
             if (sourceKeysToHide.has(accountName)) return; 
+            
+            // 查找所有名稱匹配的行 (不同縮排)
             const matchingRows = finalRowsWithHierarchy.filter(row => row[keyColumn] === accountName);
+            
             if (matchingRows.length > 0) {
+                 // 確保所有同名科目按縮排層級正確排序
                  matchingRows.sort((a,b) => a.indent_level - b.indent_level);
+                 
                  matchingRows.forEach(row => {
-                    // 確保該項目沒有被作為來源科目隱藏
-                    if (!sourceKeysToHide.has(row[keyColumn])) {
+                    const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
+                    if (!sourceKeysToHide.has(row[keyColumn]) && !processedItems.has(compositeKey)) {
                        row['基金名稱'] = '所有基金加總';
                        if (selectedFundType === 'business') {
                            numericCols.forEach(col => row[col] = Math.round(row[col]));
                        }
                        finalRows.push(row);
-                       processedItems.add(`${row[keyColumn]}::${row.indent_level}`);
+                       processedItems.add(compositeKey);
                     }
                  });
             }
