@@ -76,6 +76,7 @@ function refreshView() {
     }
 }
 
+// 保持 buildTree/flattenTree 函數定義，以供個別基金模式和 isSummary 標記使用
 class Node {
     constructor(name, indent, data = {}) { this.name = name.trim(); this.indent = indent; this.data = data; this.children = []; }
 }
@@ -253,10 +254,6 @@ function displayAggregated() {
         // 3. 準備輸出列表：從 ledger 轉換為可排序的列表
         const finalDataList = Array.from(ledger.values());
         
-        // 由於我們不能依賴 buildTree 的 isSummary 標記 (因為樹狀結構不穩定)，
-        // 我們將使用 ledger 中設定好的 isSummary 標籤。
-        // 但我們需要將 finalDataList 傳入 buildTree/flattenTree 來解決縮排不連續的問題。
-        
         // ★ 核心：保護原始數值 (Preserve Values) ★
         const preservedValues = new Map();
         finalDataList.forEach(row => {
@@ -266,8 +263,10 @@ function displayAggregated() {
             preservedValues.set(compositeKey, data);
         });
 
-        // 運行 buildTree/flattenTree 僅為了解決縮排不連續的問題，並不會使用它的數值
+        // 運行 buildTree 來產生準確的階層結構（children 屬性）
         const tempTree = buildTree(finalDataList, keyColumn, numericCols); 
+        
+        // 運行 flattenTree 來生成包含 isSummary 標籤的列表
         const finalRowsWithHierarchy = [];
         flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
         
@@ -306,6 +305,7 @@ function displayAggregated() {
                  matchingRows.forEach(row => {
                     const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
                     if (!processedItems.has(compositeKey)) {
+                       // isSummary 已被 flattenTree 正確標記
                        row['基金名稱'] = '所有基金加總';
                        if (selectedFundType === 'business') {
                            numericCols.forEach(col => row[col] = Math.round(row[col]));
