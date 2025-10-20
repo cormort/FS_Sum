@@ -76,7 +76,6 @@ function refreshView() {
     }
 }
 
-// 保持 buildTree/flattenTree 函數定義，以供個別基金模式和 isSummary 標記使用
 class Node {
     constructor(name, indent, data = {}) { this.name = name.trim(); this.indent = indent; this.data = data; this.children = []; }
 }
@@ -251,7 +250,7 @@ function displayAggregated() {
 
         });
         
-        // 3. 準備輸出列表：從 ledger 轉換為可排序的列表
+        // 3. 建立階層樹以標記 isSummary (結構計算，數值保護)
         const finalDataList = Array.from(ledger.values());
         
         // ★ 核心：保護原始數值 (Preserve Values) ★
@@ -264,6 +263,7 @@ function displayAggregated() {
         });
 
         // 運行 buildTree 來產生準確的階層結構（children 屬性）
+        // 目的：1. 解決縮排不連續問題 2. 獲取準確的 isSummary 標籤
         const tempTree = buildTree(finalDataList, keyColumn, numericCols); 
         
         // 運行 flattenTree 來生成包含 isSummary 標籤的列表
@@ -407,7 +407,7 @@ function createTabsAndTables(data, customHeaders = {}, mode = 'default') {
 
     orderedDataKeys.forEach(reportKey => {
         const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
-        const config = activeConfig[baseKey];
+        const config = FULL_CONFIG[selectedFundType]?.[baseKey];
         if (!config) return;
         const columns = config.columns;
         const tabName = reportKey.replace(/_/g, ' ');
