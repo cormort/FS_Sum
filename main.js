@@ -189,6 +189,16 @@ function displayAggregated() {
                 
         // 記錄所有被合併的中央銀行專屬科目
         Object.keys(activeRules).forEach(item => centralBankOnlyItems.add(item));
+
+        // 建立公版彙總科目列表 (用於判斷是否為父級科目)
+        const publicHierarchyMap = {};
+        const allOrders = [...PUBLIC_ASSET_ORDER, ...PUBLIC_LIABILITY_ORDER];
+        allOrders.forEach(name => {
+            // 簡單判斷：如果科目名稱大寫或包含「資產」「負債」「權益」「合　　計」則為彙總層級
+             if (name.length > 2 && name === name.toUpperCase().trim() || name.includes('資產') || name.includes('負債') || name.includes('權益') || name.includes('合　　計')) {
+                 publicHierarchyMap[name] = true;
+             }
+        });
                 
         centralBankData.forEach(row => {
             let keyText = row[keyColumn]?.trim();
@@ -224,8 +234,12 @@ function displayAggregated() {
 
             // A. 處理合併後的目標科目 / 正常科目
             const compositeKey = `${targetName}::${targetIndent}`;
+            
+            // 判斷是否為彙總科目 (isSummary)，用於初始化 Ledger
+            const isSummary = publicHierarchyMap[targetName] || false;
+            
             if (!ledger.has(compositeKey)) {
-                ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
+                ledger.set(compositeKey, { [keyColumn]: targetName, 'indent_level': targetIndent, 'isSummary': isSummary, ...Object.fromEntries(numericCols.map(c => [c, 0])) });
             }
             
             const summaryRow = ledger.get(compositeKey);
@@ -236,22 +250,24 @@ function displayAggregated() {
 
         });
         
-        // 3. 建立階層樹以標記 isSummary (結構計算，數值保護)
+        // 3. 準備輸出列表：從 ledger 轉換為可排序的列表
         const finalDataList = Array.from(ledger.values());
+        
+        // 由於我們不能依賴 buildTree 的 isSummary 標記 (因為樹狀結構不穩定)，
+        // 我們將使用 ledger 中設定好的 isSummary 標籤。
+        // 但我們需要將 finalDataList 傳入 buildTree/flattenTree 來解決縮排不連續的問題。
         
         // ★ 核心：保護原始數值 (Preserve Values) ★
         const preservedValues = new Map();
         finalDataList.forEach(row => {
             const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
-            const data = {};
+            const data = { 'isSummary': row.isSummary };
             numericCols.forEach(col => { data[col] = row[col]; });
             preservedValues.set(compositeKey, data);
         });
 
-        // 運行 buildTree 來產生準確的階層結構（children 屬性）
+        // 運行 buildTree/flattenTree 僅為了解決縮排不連續的問題，並不會使用它的數值
         const tempTree = buildTree(finalDataList, keyColumn, numericCols); 
-        
-        // 運行 flattenTree 來生成包含 isSummary 標籤的列表
         const finalRowsWithHierarchy = [];
         flattenTree(tempTree, finalRowsWithHierarchy, keyColumn);
         
@@ -264,6 +280,7 @@ function displayAggregated() {
                 numericCols.forEach(col => {
                     row[col] = originalData[col]; 
                 });
+                row.isSummary = originalData.isSummary; // 還原正確的 isSummary 標籤
             }
         });
         
@@ -289,7 +306,6 @@ function displayAggregated() {
                  matchingRows.forEach(row => {
                     const compositeKey = `${row[keyColumn]}::${row.indent_level}`;
                     if (!processedItems.has(compositeKey)) {
-                       // isSummary 已被 flattenTree 正確標記
                        row['基金名稱'] = '所有基金加總';
                        if (selectedFundType === 'business') {
                            numericCols.forEach(col => row[col] = Math.round(row[col]));
