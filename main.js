@@ -76,7 +76,6 @@ function refreshView() {
     }
 }
 
-// 保持 buildTree/flattenTree 函數定義，以供個別基金模式和 isSummary 標記使用
 class Node {
     constructor(name, indent, data = {}) { this.name = name.trim(); this.indent = indent; this.data = data; this.children = []; }
 }
@@ -162,6 +161,7 @@ function displayAggregated() {
 
         // Helper: 查找 ledger 中是否存在該名稱的科目，並返回其縮排
         const getExistingIndent = (name) => {
+            // 查找所有名稱匹配的 key，返回第一個找到的縮排
             const existingKey = [...ledger.keys()].find(k => k.startsWith(`${name}::`));
             return existingKey ? parseInt(existingKey.split('::')[1]) : null;
         };
@@ -329,7 +329,7 @@ function displayComparison() {
     reportKeysInData.forEach(reportKey => {
         if (!allExtractedData[reportKey] || allExtractedData[reportKey].length === 0) return;
         const baseKey = reportKey.replace(/_資產|_負債及權益/, '');
-        const config = activeConfig[baseKey];
+        const config = FULL_CONFIG[selectedFundType]?.[baseKey];
         if (!config || !config.keyColumn) return;
         const keyColumn = config.keyColumn;
         const items = [...new Set(allExtractedData[reportKey].map(r => r[keyColumn]))].filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-Hant'));
