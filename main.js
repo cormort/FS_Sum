@@ -161,7 +161,6 @@ function displayAggregated() {
 
         // Helper: 查找 ledger 中是否存在該名稱的科目，並返回其縮排
         const getExistingIndent = (name) => {
-            // 查找所有名稱匹配的 key，返回第一個找到的縮排
             const existingKey = [...ledger.keys()].find(k => k.startsWith(`${name}::`));
             return existingKey ? parseInt(existingKey.split('::')[1]) : null;
         };
