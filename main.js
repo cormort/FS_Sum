@@ -1,8 +1,8 @@
 // main.js
 
-import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CASH_FLOW_ACCOUNT_ORDER } from './config.js';
-import { processFile } from './parsers.js';
-import { exportData } from './utils.js';
+import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CASH_FLOW_ACCOUNT_ORDER } from './config.js?v=fix4';
+import { processFile } from './parsers.js?v=fix4';
+import { exportData } from './utils.js?v=fix4';
 
 // --- 公版順序樣板 ---
 const PUBLIC_ASSET_ORDER = [ "資產", "流動資產", "現金", "存放銀行同業", "存放央行", "流動金融資產", "應收款項", "本期所得稅資產", "黃金與白銀", "存貨", "消耗性生物資產－流動", "生產性生物資產－流動", "預付款項", "短期墊款", "待出售非流動資產", "合約資產－流動", "其他流動資產", "押匯貼現及放款", "押匯及貼現", "短期放款及透支", "短期擔保放款及透支", "中期放款", "中期擔保放款", "長期放款", "長期擔保放款", "銀行業融通", "基金、投資及長期應收款", "基金", "非流動金融資產", "採用權益法之投資", "其他長期投資", "長期應收款項", "再保險準備資產", "合約資產－非流動", "不動產、廠房及設備", "土地", "土地改良物", "房屋及建築", "機械及設備", "交通及運輸設備", "什項設備", "租賃權益改良", "購建中固定資產", "核能燃料", "生產性植物", "使用權資產", "投資性不動產", "投資性不動產－土地", "投資性不動產－土地改良物", "投資性不動產－房屋及建築", "投資性不動產－租賃權益改良", "建造中之投資性不動產", "無形資產", "累計減損－無形資產", "生物資產", "消耗性生物資產－非流動", "生產性生物資產－非流動", "其他資產", "遞延資產", "遞延所得稅資產", "待整理資產", "什項資產", "合　　計" ];
@@ -20,15 +20,24 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-ove
 dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });
 
 function handleFiles(files) {
+    console.log('[DEBUG] handleFiles called, selectedFundType:', selectedFundType);
     if (!selectedFundType) return alert('請先返回並選擇基金類型！');
     if (!files || files.length === 0) return;
     console.clear();
     resetState(false);
     statusDiv.textContent = `讀取中... 偵測到 ${files.length} 個檔案。`;
-    const filePromises = Array.from(files).map(file => processFile(file, selectedFundType));
+    const filePromises = Array.from(files).map(file => {
+        console.log('[DEBUG] Processing file:', file.name);
+        return processFile(file, selectedFundType);
+    });
     Promise.all(filePromises).then(results => {
+        console.log('[DEBUG] All files processed, results:', results);
         const successfulResults = results.filter(r => r);
-        successfulResults.forEach(r => fundFileMap[r.fundName] = r.fileName);
+        console.log('[DEBUG] Successful results count:', successfulResults.length);
+        successfulResults.forEach(r => {
+            console.log('[DEBUG] Result:', r.fundName, 'Data keys:', Object.keys(r.data));
+            fundFileMap[r.fundName] = r.fileName;
+        });
         fundNames = successfulResults.map(r => r.fundName);
         successfulResults.forEach(result => {
             for (const reportKey in result.data) {
@@ -36,6 +45,7 @@ function handleFiles(files) {
                 allExtractedData[reportKey].push(...result.data[reportKey]);
             }
         });
+        console.log('[DEBUG] fundNames:', fundNames, 'allExtractedData keys:', Object.keys(allExtractedData));
         if (fundNames.length > 0) {
             statusDiv.textContent = `處理完成！共 ${fundNames.length} 個基金。`;
             renderControls();
@@ -48,8 +58,9 @@ function handleFiles(files) {
 function resetState(fullReset = true) {
     allExtractedData = {}; fundNames = []; fundFileMap = {};
     outputContainer.innerHTML = ''; controlsContainer.innerHTML = '';
-    statusDiv.textContent = ''; fileInput.value = '';
+    statusDiv.textContent = '';
     if (fullReset) {
+        fileInput.value = ''; // Only clear file input on full reset, not during processing
         fundTypeDisplay.textContent = ''; mainContent.style.display = 'none';
         typeSelector.style.display = 'block';
         document.querySelectorAll('input[name="fund-type"]').forEach(radio => radio.checked = false);

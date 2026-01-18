@@ -33,20 +33,45 @@ export function extractFundName(workbook) {
 }
 
 // --- 動態表格解析相關 (for 作業基金) ---
+// 尋找表頭所在的列索引
+// 支援空白正規化與部分關鍵字匹配
 export function findHeaderRowIndex(data, columns) {
+    if (!data || data.length === 0) return -1;
     let bestMatch = { rowIndex: -1, score: 0 };
-    for (let i = 0; i < Math.min(data.length, 10); i++) {
+    
+    // 預先處理要尋找的 columns，移除空白以利比對
+    const normalizedTargets = columns.map(c => c.replace(/\s|　/g, ''));
+
+    // 掃描前 20 列 (避免表頭過深)
+    const scanLimit = Math.min(data.length, 20);
+    
+    for (let i = 0; i < scanLimit; i++) {
         const row = data[i];
-        if (!Array.isArray(row) || row.length === 0) continue;
-        const rowAsString = row.join(' ').replace(/\s/g, '');
+        if (!Array.isArray(row)) continue;
+        
+        // 正規化該列所有儲存格內容
+        const normalizedRow = row.map(cell => String(cell || '').replace(/\s|　/g, ''));
+        
         let score = 0;
-        columns.forEach(col => {
-            const cleanCol = col.replace(/\s/g, '');
-            if (rowAsString.includes(cleanCol)) score++;
+        normalizedTargets.forEach(target => {
+            // 檢查列中是否包含目標欄位 (雙向包含：目標在儲存格內，或儲存格是目標的子字串)
+            // 例如：Target="本年度預算數", Cell="預算數" -> Match
+            // 例如：Target="科目", Cell="科　　目" -> Match (經正規化後)
+            const match = normalizedRow.some(cellVal => {
+                if (!cellVal) return false;
+                return cellVal.includes(target) || target.includes(cellVal);
+            });
+            if (match) score++;
         });
-        if (score > bestMatch.score) bestMatch = { rowIndex: i, score };
+
+        if (score > bestMatch.score) {
+            bestMatch = { rowIndex: i, score };
+        }
     }
-    return bestMatch.score > 1 ? bestMatch.rowIndex : -1;
+
+    // 只要有匹配到任何欄位，就視為找到 (由 >1 放寬為 >0，因有些表可能極簡)
+    // 但為避免誤判，若 score 過低仍需謹慎，先維持 > 0 即可，因為我們會取最佳解
+    return bestMatch.score > 0 ? bestMatch.rowIndex : -1;
 }
 
 export function getHeaderMapping(headerRow, columns, startCol = 0) {
