@@ -1,8 +1,8 @@
 // main.js
 
-import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CASH_FLOW_ACCOUNT_ORDER } from './config.js?v=fix4';
-import { processFile } from './parsers.js?v=fix4';
-import { exportData } from './utils.js?v=fix4';
+import { FULL_CONFIG, PROFIT_LOSS_ACCOUNT_ORDER, APPROPRIATION_ACCOUNT_ORDER, CASH_FLOW_ACCOUNT_ORDER } from './config.js?v=fix5';
+import { processFile } from './parsers.js?v=fix5';
+import { exportData } from './utils.js?v=fix5';
 
 // --- 公版順序樣板 ---
 const PUBLIC_ASSET_ORDER = [ "資產", "流動資產", "現金", "存放銀行同業", "存放央行", "流動金融資產", "應收款項", "本期所得稅資產", "黃金與白銀", "存貨", "消耗性生物資產－流動", "生產性生物資產－流動", "預付款項", "短期墊款", "待出售非流動資產", "合約資產－流動", "其他流動資產", "押匯貼現及放款", "押匯及貼現", "短期放款及透支", "短期擔保放款及透支", "中期放款", "中期擔保放款", "長期放款", "長期擔保放款", "銀行業融通", "基金、投資及長期應收款", "基金", "非流動金融資產", "採用權益法之投資", "其他長期投資", "長期應收款項", "再保險準備資產", "合約資產－非流動", "不動產、廠房及設備", "土地", "土地改良物", "房屋及建築", "機械及設備", "交通及運輸設備", "什項設備", "租賃權益改良", "購建中固定資產", "核能燃料", "生產性植物", "使用權資產", "投資性不動產", "投資性不動產－土地", "投資性不動產－土地改良物", "投資性不動產－房屋及建築", "投資性不動產－租賃權益改良", "建造中之投資性不動產", "無形資產", "累計減損－無形資產", "生物資產", "消耗性生物資產－非流動", "生產性生物資產－非流動", "其他資產", "遞延資產", "遞延所得稅資產", "待整理資產", "什項資產", "合　　計" ];
@@ -17,7 +17,32 @@ dropZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => handleFiles(e.target.files));
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); handleFiles(e.dataTransfer.files); });
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); collectDroppedFiles(e.dataTransfer).then(handleFiles); });
+
+// 支援拖曳資料夾：自動展開其中的 .xlsx / .xls 檔（略過 ~$ 暫存檔）
+async function collectDroppedFiles(dataTransfer) {
+    const entries = Array.from(dataTransfer.items || [])
+        .map(item => item.webkitGetAsEntry && item.webkitGetAsEntry())
+        .filter(Boolean);
+    if (!entries.some(en => en.isDirectory)) return dataTransfer.files;
+
+    const files = [];
+    async function walk(entry) {
+        if (entry.isFile) {
+            const f = await new Promise((res, rej) => entry.file(res, rej)).catch(() => null);
+            if (f && /\.xlsx?$/i.test(f.name) && !f.name.startsWith('~$')) files.push(f);
+        } else if (entry.isDirectory) {
+            const reader = entry.createReader();
+            let batch;
+            do {
+                batch = await new Promise((res, rej) => reader.readEntries(res, rej)).catch(() => []);
+                for (const en of batch) await walk(en);
+            } while (batch.length > 0);
+        }
+    }
+    for (const en of entries) await walk(en);
+    return files;
+}
 
 function handleFiles(files) {
     console.log('[DEBUG] handleFiles called, selectedFundType:', selectedFundType);
@@ -164,8 +189,20 @@ function displayAggregated() {
             return null; // 沒找到
         };
 
-        // --- Step 1: 加總所有「其他基金」(非中央銀行) ---
-        const otherFundsData = sourceReportData.filter(r => r['基金名稱'] !== '中央銀行');
+        // --- 中央銀行特殊科目 → 公版科目 對照 ---
+        // 注意：來源科目必須是「只有央行才有」的科目名稱；
+        // 觸發條件用科目名稱本身判斷（央行檔案抓不到基金名稱，不能靠基金名稱過濾）
+        const mergeRules = {
+            '損益表': { '事業投資利益': '採用權益法認列之關聯企業及合資利益之份額', '事業投資損失': '採用權益法認列之關聯企業及合資損失之份額' },
+            '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '融通': '押匯貼現及放款' },
+            '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
+        };
+        const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
+        const sourceToTargetMap = new Map(Object.entries(activeRules));
+        const sourceKeysToHide = new Set(Object.keys(activeRules));
+
+        // --- Step 1: 加總所有非特殊科目 ---
+        const otherFundsData = sourceReportData.filter(r => !sourceToTargetMap.has(r[keyColumn]?.trim()));
         otherFundsData.forEach(row => {
             const keyText = row[keyColumn]?.trim();
             if (!keyText) return;
@@ -180,16 +217,8 @@ function displayAggregated() {
             });
         });
 
-        // --- Step 2: 處理「中央銀行」的數據，並應用雙重累加規則 ---
-        const centralBankData = sourceReportData.filter(r => r['基金名稱'] === '中央銀行');
-        const mergeRules = {
-             // 規則擴展：將所有可能的來源都對應到目標
-            '資產負債表_資產': { '存放銀行業': '存放銀行同業', '事業投資': '採用權益法之投資', '其他長期投資': '採用權益法之投資', '融通': '押匯貼現及放款', '銀行業融通': '押匯貼現及放款' },
-            '資產負債表_負債及權益': { '銀行業存款': '銀行同業存款', '存款': '存款、匯款及金融債券', '公庫及政府機關存款': '支票存款', '儲蓄存款及儲蓄券': '儲蓄存款' }
-        };
-        const activeRules = (selectedFundType === 'business' && mergeRules[reportKey]) ? mergeRules[reportKey] : {};
-        const sourceToTargetMap = new Map(Object.entries(activeRules));
-        const sourceKeysToHide = new Set(Object.keys(activeRules));
+        // --- Step 2: 處理央行特殊科目，併入公版科目 ---
+        const centralBankData = sourceReportData.filter(r => sourceToTargetMap.has(r[keyColumn]?.trim()));
 
         centralBankData.forEach(row => {
             const keyText = row[keyColumn]?.trim();
@@ -238,6 +267,19 @@ function displayAggregated() {
             }
         });
         
+        // --- Step 2.5: 損益表「母公司業主」重算 ---
+        // 部分基金無此列，直接加總會少計；以 本期淨利（淨損）− 非控制權益 推得
+        if (reportKey === '損益表' && selectedFundType === 'business') {
+            const netIncomeRow = findLedgerEntryByName('本期淨利（淨損）');
+            const nonControllingRow = findLedgerEntryByName('非控制權益');
+            const parentOwnerRow = findLedgerEntryByName('母公司業主');
+            if (netIncomeRow && nonControllingRow && parentOwnerRow) {
+                numericCols.forEach(col => {
+                    parentOwnerRow[col] = (netIncomeRow[col] || 0) - (nonControllingRow[col] || 0);
+                });
+            }
+        }
+
         // --- Step 3: 排序、建立階層樹並過濾 ---
         let finalDataList = Array.from(ledger.values());
         

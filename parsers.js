@@ -1,12 +1,12 @@
 // parsers.js
 
-import { FULL_CONFIG } from "./config.js?v=fix4";
+import { FULL_CONFIG } from "./config.js?v=fix5";
 import {
   findSheet,
   extractFundName,
   findHeaderRowIndex,
   getHeaderMapping,
-} from "./utils.js?v=fix4";
+} from "./utils.js?v=fix5";
 
 // ★★★ 核心修改：專門為現金流量表添加後綴的輔助函式 ★★★
 function applyCashFlowSuffixes(records, keyColumn) {
@@ -472,11 +472,12 @@ export function processFile(file, selectedFundType) {
             : null,
         );
       } catch (error) {
-        console.error("Error processing file:", file.name, error);
-        reject(error);
+        // 單一檔案失敗（格式不符、非 Excel 等）不中斷整批處理
+        console.warn("無法解析檔案，已略過:", file.name, error);
+        resolve(null);
       }
     };
-    reader.onerror = (error) => reject(error);
+    reader.onerror = () => { console.warn("無法讀取檔案，已略過:", file.name); resolve(null); };
     reader.readAsArrayBuffer(file);
   });
 }
